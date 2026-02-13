@@ -3,10 +3,12 @@
     "myio": {
       "command": "node",
       "args": [
-        "/Users/macpro/Documents/DEV/myio-mcp/src/index.ts"
+        "/absolute/path/to/myio-mcp/dist/index.js"
       ],
       "env": {
-        "MYIO_BASE_URL": "http://192.168.1.100:843"
+        "MYIO_BASE_URL": "http://192.168.1.170",
+        "MYIO_USERNAME": "admin",
+        "MYIO_PASSWORD": "admin"
       }
     }
   }
