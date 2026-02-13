@@ -150,16 +150,12 @@ The server communicates with myIO via REST API endpoints:
 ```
 myio-mcp/
 ├── src/
-│   ├── index.ts          # Main MCP server entry point
-│   ├── api.ts            # myIO REST API client
-│   └── tools/            # Device-specific tool implementations
-│       ├── switch.ts     # Switch control tools
-│       ├── relay.ts      # Relay control tools
-│       ├── pwm.ts        # PWM control tools
-│       └── sensor.ts     # Sensor reading tools
+│   ├── index.ts          # Main MCP server entry point and tool implementations
+│   └── api.ts            # myIO REST API client
 ├── dist/                 # Compiled JavaScript output
 ├── package.json          # Project dependencies and scripts
 ├── tsconfig.json         # TypeScript configuration
+├── API_REFERENCE.md      # API documentation and integration notes
 └── README.md            # This file
 ```
 
@@ -195,6 +191,12 @@ If you cannot connect to the myIO controller:
 ### Authentication
 
 Some myIO configurations may require HTTP authentication. If you encounter 401 errors, you may need to modify the API client to include authentication headers.
+
+### API Implementation Status
+
+> **Important**: The current API client implementation uses placeholder REST API endpoints that follow common REST conventions. To use this server with your actual myIO Valet system, you need to update the API endpoints in `src/api.ts` to match the exact API specification from your IO Valet-3.9+API_HU.pdf documentation.
+
+See [API_REFERENCE.md](./API_REFERENCE.md) for details on what needs to be updated.
 
 ## License
 
