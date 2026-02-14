@@ -5,9 +5,9 @@
   "version": "1.0.0",
   "description": "MCP server for myIO smart home controller",
   "author": {
-    "name": "Peter Szabo",
+    "name": "SmarthomeNinja",
     "email": "info@myioserver.com",
-    "url": "smarthome.ninja"
+    "url": "https://github.com/SmarthomeNinja"
   },
   "homepage": "https://smarthome.ninja",
   "documentation": "https://github.com/SmarthomeNinja/myio-mcp/blob/main/README.md",
