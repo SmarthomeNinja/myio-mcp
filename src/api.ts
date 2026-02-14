@@ -10,6 +10,12 @@
  * Authentication: HTTP Basic Auth (MYIO_USERNAME / MYIO_PASSWORD env vars)
  */
 
+import { createRequire } from 'module';
+import type { AxiosInstance } from 'axios';
+
+// ESM-compatible require for dynamic loading
+const require = createRequire(import.meta.url);
+
 // ─── Raw API Types ─────────────────────────────────────────────────────────────
 
 export interface RawRelay {
@@ -108,8 +114,6 @@ export interface SensorReading {
 
 // ─── API Client ────────────────────────────────────────────────────────────────
 
-import type { AxiosInstance } from 'axios';
-
 export interface MyIOConfig {
   baseUrl: string;
   username?: string;
@@ -137,10 +141,11 @@ export class MyIOAPI {
     if (this._http) {
       return this._http;
     }
-    
+
+    // Dynamic require to delay module loading
     const http = require('http');
     const axios = require('axios').default;
-  
+
     this._http = axios.create({
       baseURL: this.baseUrl,
       auth: {
@@ -150,7 +155,7 @@ export class MyIOAPI {
       timeout: 10_000,
       httpAgent: new http.Agent({ insecureHTTPParser: true } as any),
     });
-    
+
     return this._http!;
   }
 
