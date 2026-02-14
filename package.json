@@ -20,7 +20,6 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "axios": "^1.13.5",
     "zod": "^3.25.0"
   },
   "devDependencies": {
