@@ -11,6 +11,7 @@
  */
 
 // ─── Raw API Types ─────────────────────────────────────────────────────────────
+import http from 'http';
 
 export interface RawRelay {
   id: number;
@@ -128,6 +129,7 @@ export class MyIOAPI {
         password: config.password ?? '',
       },
       timeout: 10_000,
+      httpAgent: new http.Agent({ insecureHTTPParser: true } as any),
       // axios tolerates non-standard headers (e.g. "Renderer-Mode") that Node fetch rejects
     });
   }
