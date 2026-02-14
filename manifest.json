@@ -18,6 +18,7 @@
     "mcp_config": {
       "command": "node",
       "args": [
+        "--insecure-http-parser",
         "${__dirname}/dist/index.js"
       ],
       "env": {}
