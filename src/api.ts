@@ -11,7 +11,7 @@
  */
 
 // ─── Raw API Types ─────────────────────────────────────────────────────────────
-import { execSync } from 'child_process';
+import http from 'http';
 
 export interface RawRelay {
   id: number;
