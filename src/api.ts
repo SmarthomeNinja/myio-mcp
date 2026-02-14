@@ -11,7 +11,6 @@
  */
 
 // ─── Raw API Types ─────────────────────────────────────────────────────────────
-import http from 'http';
 
 export interface RawRelay {
   id: number;
@@ -109,7 +108,7 @@ export interface SensorReading {
 
 // ─── API Client ────────────────────────────────────────────────────────────────
 
-import axios, { type AxiosInstance } from 'axios';
+import type { AxiosInstance } from 'axios';
 
 export interface MyIOConfig {
   baseUrl: string;
@@ -118,24 +117,45 @@ export interface MyIOConfig {
 }
 
 export class MyIOAPI {
-  private http: AxiosInstance;
+  private _http: AxiosInstance | null = null;
+  private readonly baseUrl: string;
+  private readonly username: string;
+  private readonly password: string;
 
   constructor(config: MyIOConfig) {
-    const baseURL = config.baseUrl.replace(/\/$/, '');
-    this.http = axios.create({
-      baseURL,
+    this.baseUrl = config.baseUrl.replace(/\/$/, '');
+    this.username = config.username ?? '';
+    this.password = config.password ?? '';
+  }
+
+  /**
+   * Lazy initialization of axios instance with insecure HTTP parser.
+   * This delays the http.Agent creation until the first actual API call,
+   * which helps avoid crashes in MCPB's sandboxed environment.
+   */
+  private getHttp(): AxiosInstance {
+    if (this._http) {
+      return this._http;
+    }
+    
+    const http = require('http');
+    const axios = require('axios').default;
+  
+    this._http = axios.create({
+      baseURL: this.baseUrl,
       auth: {
-        username: config.username ?? '',
-        password: config.password ?? '',
+        username: this.username,
+        password: this.password,
       },
       timeout: 10_000,
       httpAgent: new http.Agent({ insecureHTTPParser: true } as any),
-      // axios tolerates non-standard headers (e.g. "Renderer-Mode") that Node fetch rejects
     });
+    
+    return this._http!;
   }
 
   private async get<T>(path: string): Promise<T> {
-    const res = await this.http.get<T>(path);
+    const res = await this.getHttp().get<T>(path);
     return res.data;
   }
 
@@ -167,7 +187,7 @@ export class MyIOAPI {
       .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
       .join('&');
 
-    await this.http.post('/', body, {
+    await this.getHttp().post('/', body, {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     });
   }
