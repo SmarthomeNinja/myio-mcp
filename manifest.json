@@ -1,0 +1,58 @@
+{
+  "manifest_version": "0.2",
+  "name": "myio-mcp",
+  "display_name": "myIO-MCP",
+  "version": "1.0.0",
+  "description": "MCP server for myIO smart home controller",
+  "author": {
+    "name": "Peter Szabo",
+    "email": "info@myioserver.com",
+    "url": "smarthome.ninja"
+  },
+  "homepage": "https://smarthome.ninja",
+  "documentation": "https://github.com/SmarthomeNinja/myio-mcp/blob/main/README.md",
+  "icon": "https://github.com/SmarthomeNinja/myio-mcp/blob/main/SHN_icon.png",
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/dist/index.js"
+      ],
+      "env": {}
+    }
+  },
+  "user_config": {
+    "MYIO_BASE_URL": {
+      "type": "string",
+      "title": "myIO Server host URL",
+      "description": "The IP address or hostname of your myIO server (e.g. http://192.168.1.170)",
+      "required": true,
+      "sensitive": false
+    },
+    "MYIO_USERNAME": {
+      "type": "string",
+      "title": "Username",
+      "description": "Basic auth username for your myIO controller",
+      "required": true,
+      "sensitive": false
+    },
+    "MYIO_PASSWORD": {
+      "type": "string",
+      "title": "Password",
+      "description": "Basic auth password for your myIO Server",
+      "required": true,
+      "sensitive": true
+    }
+  },
+  "keywords": [
+    "myIO",
+    "Smarthome"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SmarthomeNinja/myio-mcp"
+  }
+}
