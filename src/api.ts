@@ -2,6 +2,9 @@
  * myIO REST API Client
  * Implements the myIO smart home controller REST API.
  *
+ * Uses curl for HTTP requests to bypass Node.js HTTP parser issues
+ * with non-standard headers from myIO controller.
+ *
  * Endpoints:
  *   GET  /sens_out.json    - Lightweight status snapshot (poll frequently)
  *   GET  /d_sens_out.json  - Full snapshot with device descriptions (startup/init only)
@@ -10,11 +13,7 @@
  * Authentication: HTTP Basic Auth (MYIO_USERNAME / MYIO_PASSWORD env vars)
  */
 
-import { createRequire } from 'module';
-import type { AxiosInstance } from 'axios';
-
-// ESM-compatible require for dynamic loading
-const require = createRequire(import.meta.url);
+import { execSync } from 'child_process';
 
 // ─── Raw API Types ─────────────────────────────────────────────────────────────
 
@@ -121,7 +120,6 @@ export interface MyIOConfig {
 }
 
 export class MyIOAPI {
-  private _http: AxiosInstance | null = null;
   private readonly baseUrl: string;
   private readonly username: string;
   private readonly password: string;
@@ -133,35 +131,33 @@ export class MyIOAPI {
   }
 
   /**
-   * Lazy initialization of axios instance with insecure HTTP parser.
-   * This delays the http.Agent creation until the first actual API call,
-   * which helps avoid crashes in MCPB's sandboxed environment.
+   * Execute a curl GET request and return the response body.
    */
-  private getHttp(): AxiosInstance {
-    if (this._http) {
-      return this._http;
+  private curlGet(path: string): string {
+    const url = `${this.baseUrl}${path}`;
+    const auth = this.username ? `-u "${this.username}:${this.password}"` : '';
+    const cmd = `curl -s --max-time 10 ${auth} "${url}"`;
+    
+    try {
+      return execSync(cmd, { encoding: 'utf-8', timeout: 15000 });
+    } catch (error: any) {
+      throw new Error(`curl GET failed: ${error.message}`);
     }
-
-    // Dynamic require to delay module loading
-    const http = require('http');
-    const axios = require('axios').default;
-
-    this._http = axios.create({
-      baseURL: this.baseUrl,
-      auth: {
-        username: this.username,
-        password: this.password,
-      },
-      timeout: 10_000,
-      httpAgent: new http.Agent({ insecureHTTPParser: true } as any),
-    });
-
-    return this._http!;
   }
 
-  private async get<T>(path: string): Promise<T> {
-    const res = await this.getHttp().get<T>(path);
-    return res.data;
+  /**
+   * Execute a curl POST request with form-encoded body.
+   */
+  private curlPost(path: string, body: string): string {
+    const url = `${this.baseUrl}${path}`;
+    const auth = this.username ? `-u "${this.username}:${this.password}"` : '';
+    const cmd = `curl -s --max-time 10 ${auth} -X POST -d "${body}" "${url}"`;
+    
+    try {
+      return execSync(cmd, { encoding: 'utf-8', timeout: 15000 });
+    } catch (error: any) {
+      throw new Error(`curl POST failed: ${error.message}`);
+    }
   }
 
   /**
@@ -169,7 +165,8 @@ export class MyIOAPI {
    * Do NOT use to get descriptions — use getFullStatus() once at startup.
    */
   async getStatus(): Promise<SensOutData> {
-    return this.get<SensOutData>('/sens_out.json');
+    const json = this.curlGet('/sens_out.json');
+    return JSON.parse(json);
   }
 
   /**
@@ -177,7 +174,8 @@ export class MyIOAPI {
    * Slower — call once at startup or when names change.
    */
   async getFullStatus(): Promise<SensOutData> {
-    return this.get<SensOutData>('/d_sens_out.json');
+    const json = this.curlGet('/d_sens_out.json');
+    return JSON.parse(json);
   }
 
   /**
@@ -192,9 +190,7 @@ export class MyIOAPI {
       .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
       .join('&');
 
-    await this.getHttp().post('/', body, {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    });
+    this.curlPost('/', body);
   }
 
   // ─── Relay Commands (ID: 1–100) ─────────────────────────────────────────────
@@ -274,12 +270,11 @@ export class MyIOAPI {
     }
 
     for (const entry of Object.values(data.group)) {
-      // A group is ON if any of its members is on (simplified)
       devices.push({
         id: entry.id,
         description: entry.description ?? `Group ${entry.id}`,
         type: 'group',
-        state: false, // Group state isn't directly available; call getStatus() to check members
+        state: false,
       });
     }
 
