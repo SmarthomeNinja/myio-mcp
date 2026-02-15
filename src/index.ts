@@ -28,7 +28,7 @@ import { MyIOAPI } from './api.js';
 
 // ─── Configuration ─────────────────────────────────────────────────────────────
 
-const MYIO_BASE_URL  = process.env.MYIO_BASE_URL  || 'http://192.168.1.100';
+const MYIO_BASE_URL  = process.env.MYIO_BASE_URL  || 'http://192.168.1.170';
 const MYIO_USERNAME  = process.env.MYIO_USERNAME  || '';
 const MYIO_PASSWORD  = process.env.MYIO_PASSWORD  || '';
 
