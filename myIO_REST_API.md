@@ -1,7 +1,10 @@
 # myIO Server – REST API Documentation
 
-> **Version:** 1.0  
-> **Purpose:** Smart home controller REST API reference. Suitable for integration, automation tools, and MCP server development.
+> **Version:** 1.1 (2026-10-25). **This file is a short English extract. The complete, authoritative reference is
+> [API_REFERENCE.md](./API_REFERENCE.md) (the firmware's own document, Hungarian, 4.x + 3.12).**
+> Corrections against the 1.0 extract, verified on the firmware source and live controllers:
+> `PCA*<id>=<value>` and `fet*<id>=<value>` take the **raw 0–255 level, not a percentage**; `hum` is **×10** (not ×100);
+> `P` is **watts (raw)**, `U` and `I` are **×10**; `imp` is the raw pulse-meter value; `temp` stays ×100.
 
 ---
 
@@ -121,7 +124,7 @@ Content-Type: application/x-www-form-urlencoded
 r_ON=16
 ```
 
-Multiple commands in one POST body:
+Multiple commands in one POST body (the MCP server posts to `/info.json`, which the firmware accepts as well):
 
 ```
 r_ON=16&r_OFF=5&PCA_ON=2001
@@ -319,23 +322,23 @@ Sensor readings. The JSON key matches the sensor ID.
 | Sensor ID Range | Type             | Field  | Description |
 |-----------------|------------------|--------|-------------|
 | `1–100`         | Temperature      | `temp` | Temperature × 100 → divide by 100 for °C |
-| `101–108`       | Humidity         | `hum`  | Humidity × 100 → divide by 100 for % |
-| `200`           | Pulse counter    | `imp`  | Energy counter × 100 → divide by 100 for kWh |
-| `201–203`       | SDM630 Power     | `P`    | Active power × 100 → divide by 100 for kW (per phase) |
-| `204–206`       | SDM630 Voltage   | `U`    | Voltage × 100 → divide by 100 for V (per phase) |
-| `207–209`       | SDM630 Current   | `I`    | Current × 100 → divide by 100 for A (per phase) |
+| `101–110`       | Humidity         | `hum`  | Humidity × 10 → divide by 10 for % |
+| `200`           | Pulse counter    | `imp`  | Raw pulse-meter value (unit/h ×1000; 0 = no pulse yet) |
+| `201–203`       | SDM630 Power     | `P`    | Active power in **W** (raw, per phase) |
+| `204–206`       | SDM630 Voltage   | `U`    | Voltage × 10 → divide by 10 for V (per phase) |
+| `207–209`       | SDM630 Current   | `I`    | Current × 10 → divide by 10 for A (per phase) |
 
 **Example:**
 ```json
 "sensors": {
   "1":   { "id": 1,   "description": "hőszenzor",   "temp": 2712 },
-  "101": { "id": 101, "description": "Talaj szonda", "hum": 4523 },
+  "101": { "id": 101, "description": "Talaj szonda", "hum": 453 },
   "200": { "id": 200, "description": "kW",           "imp": 0 },
   "201": { "id": 201, "description": "P1-kW",        "P": 138 }
 }
 ```
 
-> **Decoded:** `temp: 2712` → `27.12°C` | `hum: 4523` → `45.23%` | `P: 138` → `1.38 kW`
+> **Decoded:** `temp: 2712` → `27.12°C` | `hum: 453` → `45.3%` | `P: 138` → `138 W`
 
 ---
 
@@ -389,7 +392,7 @@ max_temp_OFF*3=248    → Relay #3 turns OFF above 24.8°C
 
 | Command                        | Description |
 |--------------------------------|-------------|
-| `PCA*<id>=<value>`             | Set PCA output `<id>` to percentage value (`0–100%`) — ID is the real ID (e.g. 2005) |
+| `PCA*<id>=<value>`             | Set PCA output `<id>` to a **raw level 0–255** — ID is the real ID (e.g. 2005) |
 | `PCA_ON=<id>`                  | Turn ON PCA output |
 | `PCA_OFF=<id>`                 | Turn OFF PCA output |
 | `PCA_INV=<id>`                 | Toggle PCA output state |
@@ -397,11 +400,11 @@ max_temp_OFF*3=248    → Relay #3 turns OFF above 24.8°C
 | `PCA_temp_MIN*<id>=<val>`      | Set PCA ON threshold (× 10) |
 | `PCA_temp_MAX*<id>=<val>`      | Set PCA OFF threshold (× 10) |
 
-> **Note:** For `PCA*<id>=<val>`, use the **real ID** (e.g. `2005`). The value is a percentage (0–100), internally mapped to 0–255.
+> **Note:** For `PCA*<id>=<val>`, use the **real ID** (e.g. `2005`). The value is the raw level 0–255 (128 ≈ 50 %).
 
 **Examples:**
 ```
-PCA*2005=50       → Set PCA output #2005 to 50%
+PCA*2005=128      → Set PCA output #2005 to 128/255 (≈50 %)
 PCA_ON=2001       → Turn on PCA output #2001
 PCA_OFF=2003      → Turn off PCA output #2003
 PCA_thermoActivator*2001=2   → PCA #2001 controlled by sensor #2
@@ -415,7 +418,7 @@ PCA_temp_MAX*2003=248        → PCA #2003 turns OFF at 24.8°C
 
 | Command                        | Description |
 |--------------------------------|-------------|
-| `fet*<id>=<value>`             | Set PWM output `<id>` to percentage (`0–100%`) — ID is offset (e.g. `5` → id 105) |
+| `fet*<id>=<value>`             | Set PWM output `<id>` to a raw level 0–255 — ID is the offset (`5` → id 105) or the real id (105) |
 | `f_ON=<id>`                    | Turn ON PWM output (using real ID, e.g. 106) |
 | `f_OFF=<id>`                   | Turn OFF PWM output |
 | `f_INV=<id>`                   | Toggle PWM output |
@@ -427,7 +430,7 @@ PCA_temp_MAX*2003=248        → PCA #2003 turns OFF at 24.8°C
 
 **Examples:**
 ```
-fet*5=50          → Set PWM output #105 to 50%
+fet*5=128         → Set PWM output #105 to 128/255 (≈50 %)
 f_ON=6            → Turn on PWM output #106
 f_OFF=6           → Turn off PWM output #106
 fet_thermoActivator*1=2   → PWM #101 controlled by sensor #2
@@ -459,8 +462,8 @@ g_INV=503         → Toggle group #503 (pullUP determines behavior for mixed st
 | Context | Encoding | How to decode |
 |---------|----------|---------------|
 | Temperature sensor readings (`temp`) | × 100 | `temp / 100` → °C |
-| Humidity sensor readings (`hum`) | × 100 | `hum / 100` → % |
-| Power readings (`P`, `U`, `I`, `imp`) | × 100 | `value / 100` → kW / V / A / kWh |
+| Humidity sensor readings (`hum`) | × 10 | `hum / 10` → % |
+| SDM readings | `P` raw W; `U`, `I` × 10 | `U / 10` → V, `I / 10` → A |
 | `sensorON` / `sensorOFF` thresholds | × 10 | `value / 10` → °C or % |
 | PCA `state` / `turnON` / `turnOFF` | 0–255 | `value / 255 * 100` → % |
 | Sun sensor `sensorON`/`sensorOFF` | Special | `1` = sunrise, `2` = sunset |

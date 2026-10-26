@@ -2,8 +2,8 @@
   "manifest_version": "0.2",
   "name": "myio-mcp",
   "display_name": "myIO-MCP",
-  "version": "1.0.1",
-  "description": "MCP server for myIO smart home controller",
+  "version": "1.6.0",
+  "description": "MCP server for the myIO smart home controller: outputs, thermostats, shutters, RGB, sensors, timers, scenes, users, Flow rules, scripts, diagnostics, logs, files, Shelly, MQTT, Cloud, alarm, MIA, network, KNX, DALI, DMX, Modbus - with read-back, several controllers, resources (live state, logs, docs) and prompts (heating overview, why does X not switch, daily diagnostics, new Flow rule)",
   "author": {
     "name": "SmarthomeNinja",
     "email": "info@myioserver.com",
@@ -23,7 +23,11 @@
       "env": {
         "MYIO_BASE_URL": "${user_config.MYIO_BASE_URL}",
         "MYIO_USERNAME": "${user_config.MYIO_USERNAME}",
-        "MYIO_PASSWORD": "${user_config.MYIO_PASSWORD}"
+        "MYIO_PASSWORD": "${user_config.MYIO_PASSWORD}",
+        "MYIO_NAME": "${user_config.MYIO_NAME}",
+        "MYIO_SERVERS": "${user_config.MYIO_SERVERS}",
+        "MYIO_WRITE": "${user_config.MYIO_WRITE}",
+        "MYIO_TOOLSETS": "${user_config.MYIO_TOOLSETS}"
       }
     }
   },
@@ -31,25 +35,59 @@
     "MYIO_BASE_URL": {
       "type": "string",
       "title": "myIO Server URL",
-      "description": "The full URL of your myIO server (e.g. http://192.168.1.170)",
-      "required": true,
+      "description": "The full URL of your myIO controller (e.g. http://192.168.1.178)",
+      "required": false,
       "sensitive": false
     },
     "MYIO_USERNAME": {
       "type": "string",
       "title": "Username",
       "description": "Basic auth username for your myIO controller",
-      "required": true,
+      "required": false,
       "sensitive": false
     },
     "MYIO_PASSWORD": {
       "type": "string",
       "title": "Password",
       "description": "Basic auth password for your myIO server",
-      "required": true,
+      "required": false,
       "sensitive": true
+    },
+    "MYIO_NAME": {
+      "type": "string",
+      "title": "Controller label",
+      "description": "Short name shown in replies (e.g. Ground floor)",
+      "required": false,
+      "sensitive": false,
+      "default": "myIO"
+    },
+    "MYIO_SERVERS": {
+      "type": "string",
+      "title": "Several controllers (optional)",
+      "description": "JSON list to use more than one controller, e.g. [{\"name\":\"Ground floor\",\"url\":\"http://192.168.1.178\",\"username\":\"admin\",\"password\":\"...\"},{\"name\":\"Upstairs\",\"url\":\"http://192.168.1.177\",...}] - overrides the single URL above",
+      "required": false,
+      "sensitive": true,
+      "default": ""
+    },
+    "MYIO_WRITE": {
+      "type": "string",
+      "title": "Write level",
+      "description": "What the AI may change: state (switch outputs, thermostat targets, run Flow rules / scripts, SG mode, LED events), config (also names, timers, scenes, structures, Flow rules, scripts, files, integration and expander settings), admin (also users, permissions, system files, network, Cloud keys, restart / OTA, KNX/DALI addressing)",
+      "required": false,
+      "sensitive": false,
+      "default": "config"
+    },
+    "MYIO_TOOLSETS": {
+      "type": "string",
+      "title": "Tool groups",
+      "description": "Which tool groups to load (fewer = less context used): core (always), legacy, house, config, automation, diag, integrations, expanders. \"all\" (default), a comma list like \"house,automation\", or \"all,-legacy,-expanders\".",
+      "required": false,
+      "sensitive": false,
+      "default": "all"
     }
   },
+  "tools_generated": true,
+  "prompts_generated": true,
   "keywords": [
     "myIO",
     "smarthome",

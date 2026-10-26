@@ -1,0 +1,8 @@
+node_modules/.cache
+*.mcpb
+*.bak
+.git
+test/
+.claude
+.vscode
+scripts/

@@ -6,9 +6,10 @@
         "/absolute/path/to/myio-mcp/dist/index.js"
       ],
       "env": {
-        "MYIO_BASE_URL": "http://192.168.1.170",
+        "MYIO_BASE_URL": "http://192.168.1.178",
         "MYIO_USERNAME": "admin",
-        "MYIO_PASSWORD": "admin"
+        "MYIO_PASSWORD": "admin",
+        "MYIO_NAME": "Földszint"
       }
     }
   }

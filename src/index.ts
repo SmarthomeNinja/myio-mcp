@@ -1,461 +1,122 @@
 #!/usr/bin/env node
-
 /**
- * myIO MCP Server
- * Model Context Protocol server for myIO smart home controller.
+ * myIO MCP Server - Model Context Protocol server for the myIO smart home controller (GIGA / Opta 4.x, Due 3.12).
+ * Terv + naplo: MYIO_MCP_PLAN.md (repo gyoker). API: API_REFERENCE.md (= SD_Files/js/lang/HU/API_REFERENCE.md).
  *
- * Configuration (environment variables):
- *   MYIO_BASE_URL   - Controller URL, e.g. http://192.168.1.179 (required)
- *   MYIO_USERNAME   - Basic Auth username (required)
- *   MYIO_PASSWORD   - Basic Auth password (required)
- *
- * Device ID ranges (myIO):
- *   Relay:      1 – 100
- *   PCA:     2001 – 2128
- *   PWM:      101 – 113
- *   Group:    500 – 550
- *   Sensors:  see API docs
+ * Configuration (environment variables; the Claude Desktop .mcpb asks for them as user_config):
+ *   MYIO_BASE_URL         controller URL, e.g. http://192.168.1.178 (required unless MYIO_SERVERS)
+ *   MYIO_USERNAME         Basic Auth user
+ *   MYIO_PASSWORD         Basic Auth password
+ *   MYIO_NAME             label of the controller in replies (default: host of the URL)
+ *   MYIO_SERVERS          several controllers: JSON array [{"name","url","username","password"}] (overrides the three above)
+ *   MYIO_WRITE            write level allowed to the AI: state (switch outputs, thermostat targets, run flows/scripts...), config (names, timers,
+ *                         scenes, structures, input/output configuration), admin (users, permissions). Default: config.
+ *   MYIO_TOOLSETS         which tool groups to load: core (always), legacy, house, config, automation, diag, integrations, expanders;
+ *                         "all" (default), a list, or "all,-legacy,-expanders"
+ *   MYIO_HTTP_PORT        also serve MCP over Streamable HTTP on this port (0 = any free one); stdio stays the default
+ *   MYIO_HTTP_HOST        HTTP bind address (default 127.0.0.1; a LAN address needs MYIO_HTTP_TOKEN)
+ *   MYIO_HTTP_TOKEN       bearer token for HTTP (on loopback a random one is generated and printed when unset)
+ *   MYIO_STDIO            with MYIO_HTTP_PORT: "1" = keep stdio even on a terminal, "0" = HTTP only (default: stdio unless stdin is a TTY)
+ *   MYIO_TIMEOUT_MS       HTTP timeout (default 10000)
+ *   MYIO_MIN_GAP_MS       minimum pause between two requests to the same controller (default 150; the Due's HTTP refuses bursts)
+ *   MYIO_INSECURE_PARSER  "0" = strict Node HTTP parser (default "1": lenient, the controller writes its headers by hand)
  */
-
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import {
-  ListToolsRequestSchema,
-  CallToolRequestSchema,
-  Tool,
-} from '@modelcontextprotocol/sdk/types.js';
-import { MyIOAPI } from './api.js';
+import { parseToolsets, toolsetView, Toolset, TOOLSETS, TOOLSET_INFO } from './toolsets.js';
+import { registerResources } from './resources.js';
+import { registerPrompts } from './prompts.js';
+import { startHttp } from './http.js';
+import { parseServerConfigs, buildRegistry, Registry } from './servers.js';
+import { registerBasicTools } from './tools/basic.js';
+import { registerHouseTools } from './tools/house.js';
+import { registerConfigTools } from './tools/config.js';
+import { registerAutomationTools } from './tools/auto.js';
+import { registerDiagTools } from './tools/diag.js';
+import { registerIntegrationTools } from './tools/integr.js';
+import { registerBusTools } from './tools/bus.js';
+import type { WriteLevel } from './tools/common.js';
 
-// ─── Configuration ─────────────────────────────────────────────────────────────
+export const VERSION = '1.6.0';
 
-const MYIO_BASE_URL  = process.env.MYIO_BASE_URL  || 'http://192.168.1.170';
-const MYIO_USERNAME  = process.env.MYIO_USERNAME  || '';
-const MYIO_PASSWORD  = process.env.MYIO_PASSWORD  || '';
+const BASE_INSTRUCTIONS = `Tools for myIO smart home controllers (real hardware on the LAN; HTTP Basic auth).
+- Call myio_servers / myio_info first: the firmware version decides the feature set (3.12.x Due = base features; 4.x GIGA/Opta = everything).
+  With several controllers every tool takes a \`server\` name; without it the first one is used.
+- Element ids are shared by every tool: relays 1..RQ, FET/PWM 101..116 (legacy), groups 501.., PCA dimmer channels 2001..2000+PCAQ,
+  scene load 1000+slot (button/timer targets). myio_find maps names to ids; myio_list_devices shows roles (thermostat, shutter-up/down, rgb:<group> ...).
+- Entities: myio_thermostats / myio_set_thermostat (zones), myio_shutters / myio_shutter (UP/DOWN pairs), myio_rgb / myio_set_rgb,
+  myio_inputs / myio_press_button (wall buttons), myio_usensors / myio_set_usens (4.x universal sensors), myio_output (any output).
+- Configuration (editor level, MYIO_WRITE=config): myio_globals, myio_rename, myio_output_config, myio_input_config (button actions),
+  myio_structures (protection pairs = shutters, joiners, groups), myio_scenes / myio_scene (configuration slots), myio_timers / myio_set_timer,
+  myio_config_vars (any raw setting). Users and permissions need MYIO_WRITE=admin.
+- Automation (GIGA/Opta): myio_flows / myio_flow_save / myio_flow / myio_flow_trace (Flow rules, 4.4+), myio_scripts / myio_script_get /
+  myio_script_save / myio_script (myIO Script programs, 4.10+). Read myio_reference topic=flow|script before writing rules or programs.
+- Diagnostics: myio_sysdiag (health, resets, sockets, RAM), myio_metrics, myio_logs / myio_log (daily CSV logs; the event log explains
+  most "why did X happen" questions), myio_files / myio_file_read / myio_file_write / myio_file_op (storage), myio_fm_sync (SD mirror).
+- Integrations (each has a read tool and a _set tool): myio_shelly, myio_link (other myIO controllers), myio_mqtt, myio_cloud (admin),
+  myio_sgready (heat pump), myio_alarm (SIA alarm panel receiver), myio_mia (self-learning heating), myio_ledstrip, myio_network (admin to change),
+  myio_system (restart / web OTA, admin). Opta RS485 expanders: myio_expanders, myio_knx / myio_knx_set / myio_knx_device, myio_dali, myio_dmx, myio_modbus.
+  Passwords, keys and tokens are never shown. Offline expander panels silently ignore commands - trust the read-back.
+- Units: tools speak in real units (°C, %, W, V, A). Raw JSON (myio_get_status) is fixed point: temp x100, hum x10,
+  thresholds x10 (215 = 21.5), PCA/FET level raw 0..255.
+- Writes are real and take effect immediately. Every control tool reads the state back and reports it; a command the account
+  has no permission for is silently dropped by the controller, so trust the read-back, not the request. Flags of toggle type are
+  handled by the tools (read first, send only on change) - with myio_send_command you must do that yourself.
+- The controller has very few sockets: tools already serialize requests; do not poll faster than once per second.
+- Resources (attachable context, no tool call needed): myio://<controller>/info | /state | /flows.jsn, myio://<controller>/prog/<n>.txt,
+  myio://<controller>/log/<today|yesterday|YYYY-MM-DD>, and the bundled Hungarian API reference myio://docs/index | /script | /flow | /chapter/<id>.
+- Prompts: heating_overview, why_not_switching (element), daily_diagnostics, new_flow_rule - each reads the controller first (language hu | en).`;
 
-const api = new MyIOAPI({
-  baseUrl:  MYIO_BASE_URL,
-  username: MYIO_USERNAME,
-  password: MYIO_PASSWORD,
-});
+export function instructions(enabled: Set<Toolset> = new Set(TOOLSETS)): string {
+  const off = TOOLSETS.filter(t => !enabled.has(t));
+  if (!off.length) return BASE_INSTRUCTIONS;
+  return `${BASE_INSTRUCTIONS}\n- Toolsets loaded (MYIO_TOOLSETS): ${TOOLSETS.filter(t => enabled.has(t)).join(', ')}. Not loaded: ${off.map(t => `${t} (${TOOLSET_INFO[t]})`).join('; ')} - `
+    + 'tools of those groups mentioned above are not available here; say so if the user needs them.';
+}
+export const INSTRUCTIONS = BASE_INSTRUCTIONS;
 
-// ─── MCP Server ────────────────────────────────────────────────────────────────
-
-const server = new Server(
-  { name: 'myio-mcp', version: '1.0.0' },
-  { capabilities: { tools: {} } }
-);
-
-// ─── Tool Definitions ──────────────────────────────────────────────────────────
-
-const tools: Tool[] = [
-  // ── Discovery ──────────────────────────────────────────────────────────────
-  {
-    name: 'myio_list_devices',
-    description:
-      'List all devices in the myIO system with their IDs, names, types, and current state. ' +
-      'Includes relays (1–100), PCA outputs (2001–2128), PWM outputs (101–113), and groups (500–550). ' +
-      'Use this first to discover device IDs before sending control commands.',
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'myio_read_sensors',
-    description:
-      'Read all sensor values from the myIO system. Returns decoded values with units. ' +
-      'Sensor types: temperature (°C), humidity (%), energy (kWh), power (kW), voltage (V), current (A).',
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'myio_get_status',
-    description:
-      'Get raw live status snapshot from /sens_out.json. Returns full JSON with all outputs and sensors. ' +
-      'Use myio_list_devices for a friendlier view, or this for raw state details.',
-    inputSchema: { type: 'object', properties: {} },
-  },
-
-  // ── Relay (ID: 1–100) ──────────────────────────────────────────────────────
-  {
-    name: 'myio_relay_on',
-    description: 'Turn ON a relay output. Relay IDs are in the range 1–100.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'number', description: 'Relay ID (1–100)' },
-      },
-      required: ['id'],
-    },
-  },
-  {
-    name: 'myio_relay_off',
-    description: 'Turn OFF a relay output. Relay IDs are in the range 1–100.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'number', description: 'Relay ID (1–100)' },
-      },
-      required: ['id'],
-    },
-  },
-  {
-    name: 'myio_relay_toggle',
-    description: 'Toggle (invert) a relay output. Relay IDs are in the range 1–100.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'number', description: 'Relay ID (1–100)' },
-      },
-      required: ['id'],
-    },
-  },
-
-  // ── PCA Universal Output (ID: 2001–2128) ───────────────────────────────────
-  {
-    name: 'myio_pca_on',
-    description: 'Turn ON a PCA output to its configured ON value. PCA IDs are in the range 2001–2128.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'number', description: 'PCA ID (2001–2128)' },
-      },
-      required: ['id'],
-    },
-  },
-  {
-    name: 'myio_pca_off',
-    description: 'Turn OFF a PCA output to its configured OFF value. PCA IDs are in the range 2001–2128.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'number', description: 'PCA ID (2001–2128)' },
-      },
-      required: ['id'],
-    },
-  },
-  {
-    name: 'myio_pca_toggle',
-    description: 'Toggle a PCA output (ON↔OFF). PCA IDs are in the range 2001–2128.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'number', description: 'PCA ID (2001–2128)' },
-      },
-      required: ['id'],
-    },
-  },
-  {
-    name: 'myio_pca_set',
-    description:
-      'Set a PCA output to a specific brightness/level percentage (0–100%). ' +
-      'Useful for LED strips, dimmers, or analog outputs. PCA IDs are in the range 2001–2128.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id:      { type: 'number', description: 'PCA ID (2001–2128)' },
-        percent: { type: 'number', description: 'Level in percent (0–100)', minimum: 0, maximum: 100 },
-      },
-      required: ['id', 'percent'],
-    },
-  },
-
-  // ── PWM Output (ID: 101–113) ───────────────────────────────────────────────
-  {
-    name: 'myio_pwm_on',
-    description: 'Turn ON a PWM output to its configured ON value. PWM IDs are in the range 101–113.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'number', description: 'PWM ID (101–113)' },
-      },
-      required: ['id'],
-    },
-  },
-  {
-    name: 'myio_pwm_off',
-    description: 'Turn OFF a PWM output. PWM IDs are in the range 101–113.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'number', description: 'PWM ID (101–113)' },
-      },
-      required: ['id'],
-    },
-  },
-  {
-    name: 'myio_pwm_toggle',
-    description: 'Toggle a PWM output (ON↔OFF). PWM IDs are in the range 101–113.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'number', description: 'PWM ID (101–113)' },
-      },
-      required: ['id'],
-    },
-  },
-  {
-    name: 'myio_pwm_set',
-    description:
-      'Set a PWM output to a specific level percentage (0–100%). ' +
-      'PWM IDs are in the range 101–113.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id:      { type: 'number', description: 'PWM ID (101–113)' },
-        percent: { type: 'number', description: 'Level in percent (0–100)', minimum: 0, maximum: 100 },
-      },
-      required: ['id', 'percent'],
-    },
-  },
-
-  // ── Group (ID: 500–550) ────────────────────────────────────────────────────
-  {
-    name: 'myio_group_on',
-    description:
-      'Turn ON all outputs in a group. Group IDs are in the range 500–550. ' +
-      'Use myio_list_devices to see group members.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'number', description: 'Group ID (500–550)' },
-      },
-      required: ['id'],
-    },
-  },
-  {
-    name: 'myio_group_off',
-    description: 'Turn OFF all outputs in a group. Group IDs are in the range 500–550.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'number', description: 'Group ID (500–550)' },
-      },
-      required: ['id'],
-    },
-  },
-  {
-    name: 'myio_group_toggle',
-    description:
-      'Toggle a group of outputs. Respects the pullUP flag: if pullUP=1, mixed states turn ALL ON; ' +
-      'if pullUP=0, mixed states turn ALL OFF. Group IDs are in the range 500–550.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'number', description: 'Group ID (500–550)' },
-      },
-      required: ['id'],
-    },
-  },
-
-  // ── Raw Command (advanced) ─────────────────────────────────────────────────
-  {
-    name: 'myio_send_command',
-    description:
-      'Send a raw command string directly to the myIO controller. ' +
-      'Multiple commands can be combined. Example: "r_ON=16&r_OFF=5&PCA*2001=50". ' +
-      'Use this for advanced operations not covered by other tools, such as setting sensor thresholds.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        commands: {
-          type: 'string',
-          description:
-            'URL-encoded command string, e.g. "r_ON=16" or "r_ON=16&PCA*2001=75". ' +
-            'See myIO API docs for all available commands.',
-        },
-      },
-      required: ['commands'],
-    },
-  },
-];
-
-// ─── Tool Handlers ─────────────────────────────────────────────────────────────
-
-server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
-
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args = {} } = request.params;
-
-  const ok  = (text: string) => ({ content: [{ type: 'text' as const, text }] });
-  const err = (text: string) => ({ content: [{ type: 'text' as const, text: `❌ ${text}` }], isError: true });
-
-  try {
-    switch (name) {
-
-      // ── Discovery ────────────────────────────────────────────────────────
-
-      case 'myio_list_devices': {
-        const devices = await api.listDevices();
-        if (devices.length === 0) {
-          return ok('No devices found.');
-        }
-        const byType = (t: string) => devices.filter(d => d.type === t);
-        const fmt = (d: typeof devices[0]) => {
-          const state = d.state ? 'ON' : 'OFF';
-          const level = d.levelPercent !== undefined ? ` (${d.levelPercent}%)` : '';
-          return `  • [${d.id}] ${d.description} — ${state}${level}`;
-        };
-
-        const sections: string[] = [];
-        const relays = byType('relay');
-        const pcas   = byType('pca');
-        const pwms   = byType('pwm');
-        const groups = byType('group');
-
-        if (relays.length)  sections.push('Relays (1–100):\n'        + relays.map(fmt).join('\n'));
-        if (pcas.length)    sections.push('PCA Outputs (2001–2128):\n' + pcas.map(fmt).join('\n'));
-        if (pwms.length)    sections.push('PWM Outputs (101–113):\n'  + pwms.map(fmt).join('\n'));
-        if (groups.length)  sections.push('Groups (500–550):\n'       + groups.map(fmt).join('\n'));
-
-        return ok('myIO Devices:\n\n' + sections.join('\n\n'));
-      }
-
-      case 'myio_read_sensors': {
-        const sensors = await api.readSensors();
-        if (sensors.length === 0) {
-          return ok('No sensor data available.');
-        }
-        const lines = sensors.map(s =>
-          `  • [${s.id}] ${s.description}: ${s.value.toFixed(2)} ${s.unit}`
-        );
-        return ok('myIO Sensors:\n\n' + lines.join('\n'));
-      }
-
-      case 'myio_get_status': {
-        const data = await api.getStatus();
-        return ok(JSON.stringify(data, null, 2));
-      }
-
-      // ── Relay ────────────────────────────────────────────────────────────
-
-      case 'myio_relay_on': {
-        const id = args.id as number;
-        await api.relayOn(id);
-        return ok(`✅ Relay #${id} turned ON`);
-      }
-
-      case 'myio_relay_off': {
-        const id = args.id as number;
-        await api.relayOff(id);
-        return ok(`✅ Relay #${id} turned OFF`);
-      }
-
-      case 'myio_relay_toggle': {
-        const id = args.id as number;
-        await api.relayToggle(id);
-        return ok(`✅ Relay #${id} toggled`);
-      }
-
-      // ── PCA ──────────────────────────────────────────────────────────────
-
-      case 'myio_pca_on': {
-        const id = args.id as number;
-        await api.pcaOn(id);
-        return ok(`✅ PCA #${id} turned ON`);
-      }
-
-      case 'myio_pca_off': {
-        const id = args.id as number;
-        await api.pcaOff(id);
-        return ok(`✅ PCA #${id} turned OFF`);
-      }
-
-      case 'myio_pca_toggle': {
-        const id = args.id as number;
-        await api.pcaToggle(id);
-        return ok(`✅ PCA #${id} toggled`);
-      }
-
-      case 'myio_pca_set': {
-        const id      = args.id as number;
-        const percent = args.percent as number;
-        await api.pcaSet(id, percent);
-        return ok(`✅ PCA #${id} set to ${percent}%`);
-      }
-
-      // ── PWM ──────────────────────────────────────────────────────────────
-
-      case 'myio_pwm_on': {
-        const id = args.id as number;
-        await api.pwmOn(id);
-        return ok(`✅ PWM #${id} turned ON`);
-      }
-
-      case 'myio_pwm_off': {
-        const id = args.id as number;
-        await api.pwmOff(id);
-        return ok(`✅ PWM #${id} turned OFF`);
-      }
-
-      case 'myio_pwm_toggle': {
-        const id = args.id as number;
-        await api.pwmToggle(id);
-        return ok(`✅ PWM #${id} toggled`);
-      }
-
-      case 'myio_pwm_set': {
-        const id      = args.id as number;
-        const percent = args.percent as number;
-        await api.pwmSet(id, percent);
-        return ok(`✅ PWM #${id} set to ${percent}%`);
-      }
-
-      // ── Group ────────────────────────────────────────────────────────────
-
-      case 'myio_group_on': {
-        const id = args.id as number;
-        await api.groupOn(id);
-        return ok(`✅ Group #${id} turned ON`);
-      }
-
-      case 'myio_group_off': {
-        const id = args.id as number;
-        await api.groupOff(id);
-        return ok(`✅ Group #${id} turned OFF`);
-      }
-
-      case 'myio_group_toggle': {
-        const id = args.id as number;
-        await api.groupToggle(id);
-        return ok(`✅ Group #${id} toggled`);
-      }
-
-      // ── Raw Command ──────────────────────────────────────────────────────
-
-      case 'myio_send_command': {
-        const raw = args.commands as string;
-        // Parse the raw command string into key=value pairs
-        const parsed: Record<string, string> = {};
-        for (const part of raw.split('&')) {
-          const [k, v] = part.split('=');
-          if (k && v !== undefined) {
-            parsed[decodeURIComponent(k)] = decodeURIComponent(v);
-          }
-        }
-        await api.sendCommand(parsed);
-        return ok(`✅ Command sent: ${raw}`);
-      }
-
-      default:
-        return err(`Unknown tool: ${name}`);
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return err(message);
-  }
-});
-
-// ─── Start ─────────────────────────────────────────────────────────────────────
-
-async function main() {
-  console.error('🏠 myIO MCP Server starting...');
-  console.error(`   Base URL:  ${MYIO_BASE_URL}`);
-  console.error(`   Username:  ${MYIO_USERNAME || '(not set)'}`);
-
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-
-  console.error('✅ myIO MCP Server running on stdio');
+function writeLevel(): WriteLevel {
+  const v = (process.env.MYIO_WRITE || 'config').toLowerCase();
+  if (v === 'state' || v === 'config' || v === 'admin') return v;
+  console.error(`MYIO_WRITE=${v} is not state|config|admin - using config`);
+  return 'config';
 }
 
-main().catch((error) => {
-  console.error('Fatal error:', error);
-  process.exit(1);
-});
+export function buildServer(reg: Registry, write: WriteLevel = writeLevel(), enabled: Set<Toolset> = new Set(TOOLSETS)): McpServer {
+  const server = new McpServer({ name: 'myio-mcp', version: VERSION, title: 'myIO smart home controller' }, { instructions: instructions(enabled) });
+  const tools = new Set<string>();
+  const ctx = { reg, write, tools };
+  const v = (set: Toolset) => toolsetView(server, set, enabled, tools);
+  registerBasicTools(v('core'), ctx);       // + a legacy keszlet (a regi fajtankenti kapcsolok) ugyanebben a modulban
+  registerHouseTools(v('house'), ctx);
+  registerConfigTools(v('config'), ctx);
+  registerAutomationTools(v('automation'), ctx);
+  registerDiagTools(v('diag'), ctx);
+  registerIntegrationTools(v('integrations'), ctx);
+  registerBusTools(v('expanders'), ctx);
+  registerResources(server, ctx);
+  registerPrompts(server, ctx);
+  return server;
+}
+
+async function main() {
+  const reg = buildRegistry(parseServerConfigs());
+  const write = writeLevel();
+  const ts = parseToolsets(process.env.MYIO_TOOLSETS);
+  for (const w of ts.warnings) console.error(`MYIO_TOOLSETS: ${w}`);
+  const make = () => buildServer(reg, write, ts.enabled);
+  console.error(`myIO MCP Server ${VERSION} starting: ${reg.clients.map((c, i) => `${c.name} -> ${c.origin} (myio://${reg.slugs[i]}/)`).join(', ')} (write level: ${write}; toolsets: ${[...ts.enabled].join(',')})`);
+  const httpPort = process.env.MYIO_HTTP_PORT;
+  if (httpPort !== undefined && httpPort.trim() !== '') {
+    const port = parseInt(httpPort, 10);
+    if (!(port >= 0 && port <= 65535)) throw new Error(`MYIO_HTTP_PORT=${httpPort} is not a port number`);
+    const h = await startHttp(make, { port, host: process.env.MYIO_HTTP_HOST, token: process.env.MYIO_HTTP_TOKEN || undefined });
+    console.error(`myIO MCP Server listening on ${h.url} (Streamable HTTP, Authorization: Bearer ${h.generatedToken ? h.token + '  <- generated, set MYIO_HTTP_TOKEN to keep it' : '<MYIO_HTTP_TOKEN>'})`);
+    const st = process.env.MYIO_STDIO;
+    if (st === '0' || (st !== '1' && process.stdin.isTTY)) return;
+  }
+  await make().connect(new StdioServerTransport());
+  console.error('myIO MCP Server running on stdio');
+}
+
+main().catch(error => { console.error('Fatal error:', error); process.exit(1); });
