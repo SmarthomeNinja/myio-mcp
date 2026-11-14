@@ -1,0 +1,65 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.SmarthomeNinja/myio-mcp",
+  "title": "myIO",
+  "description": "Read and control a myIO smart home controller: heating, lighting, blinds and energy.",
+  "websiteUrl": "https://myio.hu/en/",
+  "repository": {
+    "url": "https://github.com/SmarthomeNinja/myio-mcp",
+    "source": "github"
+  },
+  "version": "1.6.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "myio-mcp",
+      "version": "1.6.1",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "MYIO_BASE_URL",
+          "description": "URL of the myIO controller, e.g. http://192.168.1.178",
+          "isRequired": true,
+          "format": "string"
+        },
+        {
+          "name": "MYIO_USERNAME",
+          "description": "myIO user name; its permission level limits what the tools can do",
+          "isRequired": true,
+          "format": "string"
+        },
+        {
+          "name": "MYIO_PASSWORD",
+          "description": "Password of the myIO user",
+          "isRequired": true,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "MYIO_WRITE",
+          "description": "Write level: state (switch only), config (also settings) or admin",
+          "isRequired": false,
+          "format": "string",
+          "default": "config",
+          "choices": ["state", "config", "admin"]
+        },
+        {
+          "name": "MYIO_TOOLSETS",
+          "description": "Tool groups to load, e.g. house,automation (default: all)",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "MYIO_SERVERS",
+          "description": "Several controllers: JSON array of {name, url, username, password}; overrides the three above",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

@@ -249,17 +249,24 @@ npm run pack          # = sync-docs + tsc + mcpb pack . myio-mcp.mcpb
 
 ### Claude Code / other MCP clients (stdio)
 
+The server is on npm as [`myio-mcp`](https://www.npmjs.com/package/myio-mcp) (Node.js 18 or later), so `npx` runs it without a checkout:
+
 ```json
 {
   "mcpServers": {
     "myio": {
-      "command": "node",
-      "args": ["/absolute/path/to/myio-mcp/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "myio-mcp"],
       "env": { "MYIO_BASE_URL": "http://192.168.1.178", "MYIO_USERNAME": "admin", "MYIO_PASSWORD": "..." }
     }
   }
 }
 ```
+
+Claude Code: `claude mcp add myio -e MYIO_BASE_URL=http://192.168.1.178 -e MYIO_USERNAME=admin -e MYIO_PASSWORD=... -- npx -y myio-mcp`.
+From a checkout, use `"command": "node"` with `"args": ["/absolute/path/to/myio-mcp/dist/index.js"]` instead.
+
+It is also listed in the official [MCP Registry](https://registry.modelcontextprotocol.io/) as `io.github.SmarthomeNinja/myio-mcp` (`server.json`).
 
 ## Development
 

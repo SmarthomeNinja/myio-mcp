@@ -1,9 +1,40 @@
 {
   "name": "myio-mcp",
   "version": "1.6.1",
-  "description": "MCP server for the myIO smart home controller (GIGA/Opta 4.x, Due 3.12)",
-  "main": "dist/index.js",
+  "mcpName": "io.github.SmarthomeNinja/myio-mcp",
+  "description": "MCP server for the myIO smart home controller: Claude and other AI assistants read and control heating, lighting, blinds and energy over the local network",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "myio",
+    "smart-home",
+    "home-automation",
+    "heating",
+    "claude"
+  ],
+  "homepage": "https://myio.hu/en/",
+  "bugs": {
+    "url": "https://github.com/SmarthomeNinja/myio-mcp/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SmarthomeNinja/myio-mcp.git"
+  },
+  "license": "MIT",
+  "author": "myIO Smart Home Zrt.",
   "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "myio-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "API_REFERENCE.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
@@ -12,16 +43,9 @@
     "test": "npm run build && node --test test/*.test.mjs",
     "smoke": "node test/smoke.mjs",
     "pack": "npm run sync-docs && npm run build && mcpb pack . myio-mcp.mcpb",
-    "sync-docs": "node scripts/sync-docs.mjs"
+    "sync-docs": "node scripts/sync-docs.mjs",
+    "prepublishOnly": "npm run build"
   },
-  "keywords": [
-    "mcp",
-    "myio",
-    "smart-home",
-    "model-context-protocol"
-  ],
-  "author": "",
-  "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "zod": "^3.25.0"
