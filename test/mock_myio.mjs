@@ -62,8 +62,11 @@ export function loadSample() {
 }
 
 export function startMock(opts = {}) {
-  const version = opts.version ?? process.env.MOCK_VERSION ?? '4.8.10';
+  let version = opts.version ?? process.env.MOCK_VERSION ?? '4.8.10';   // let: a Due-OTA telepites atirja
   const v3 = version.startsWith('3.');
+  // Due OTA (V3-fa _OTA_dev.ino): a mock Bank1-rol fut (flotta-allapot); ervenyes csomag = "MYIO" + a mock chipID + utolso bajt 0x5A
+  // (a mock "HMAC"-ja); otaNoKey: kulcs nelkuli Bank0 - a NEW bent marad, nincs ujraindulas
+  const due = { chipid: '0123456789ABCDEF0011223344556677', bank: 1 };
   // [3.12.35 / 4.18.9] automatikus EU nyari ido: dst_auto (ertek-szemantika) + dst_now a /setup var-blokkban
   const verGe = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); return true; };
   const dstOk = v3 ? verGe(version, '3.12.35') : verGe(version, '4.18.9');
@@ -222,7 +225,7 @@ export function startMock(opts = {}) {
 
   const infoJson = () => {
     const n = v3 ? (x => String(x)) : (x => x);
-    return JSON.stringify({ info: { serial: v3 ? 'D312-MOCK-0001' : 'G404-MOCK-0001', version, name: cfg.MYIOname, RQ: n(RQ), SQ: n(SQ), PCAQ: n(PCAQ), ...(v3 ? {} : { SENQ: 100, SHQ: 32 }), CPU: v3 ? 'SAM3X8E' : 'STM32H747', api: 3, right: 0, uptime: n(r4.up), reset_cause: n(r4.up < 100 ? 3 : 0), ...(v3 ? {} : { qhealth: 1, qheal: 0, eepbak: 1 }) } });
+    return JSON.stringify({ info: { serial: v3 ? 'D312-MOCK-0001' : 'G404-MOCK-0001', version, name: cfg.MYIOname, RQ: n(RQ), SQ: n(SQ), PCAQ: n(PCAQ), ...(v3 ? {} : { SENQ: 100, SHQ: 32 }), CPU: v3 ? 'SAM3X8E' : 'STM32H747', api: 3, right: 0, ...(v3 ? { bank: String(due.bank), bank1_flag: due.bank ? '177' : '0', bank1_valid: '1', chipid: due.chipid } : { uptime: r4.up }), reset_cause: n(r4.up < 100 ? 3 : 0), ...(v3 ? {} : { qhealth: 1, qheal: 0, eepbak: 1 }) } });
   };
   const minimal = o => { const m = { id: o.id, state: o.state }; for (const k of ['timerActive', 'timerRemain', 'delayActive', 'delayRemain', 'sensor', 'sensorON', 'sensorOFF', 'turnOFF', 'turnON', 'pwm', 'mixer', 'timer', 'delay']) if (o[k] !== undefined) m[k] = o[k]; return m; };
   const section = (sec, withNames) => Object.fromEntries(Object.entries(state[sec] ?? {}).map(([k, o]) => [k, withNames ? o : minimal(o)]));
@@ -415,7 +418,7 @@ var user=[${cfg.userExist.map((e, i) => (e && cfg.userRights[i] === 2 ? 1 : 0))}
     }
   }
   const sysdiag = () => JSON.stringify(v3
-    ? { up: 7308, reset: 3, tracelive: 44, loops: 235, loopmax: 111, loopmaxe: 3556, loopmaxph: 43, stepmax: 3472, stepmaxph: 43, ramfree: 61208, rammin: 8196, link: 1, reinits: 0, reinitc: 255, reaped: 0, wanthr: 0, authfail: 0, authlock: 0, authrej: 0, i2c: [0, 0, 0, 0, 0], sock: [[23, 80, '192.168.1.63', 58763, 0], [20, 843, '0.0.0.0', 0, 7303]] }
+    ? { up: r4.up, reset: 3, tracelive: 44, loops: 235, loopmax: 111, loopmaxe: 3556, loopmaxph: 43, stepmax: 3472, stepmaxph: 43, ramfree: 61208, rammin: 8196, link: 1, reinits: 0, reinitc: 255, reaped: 0, wanthr: 0, authfail: 0, authlock: 0, authrej: 0, i2c: [0, 0, 0, 0, 0], sock: [[23, 80, '192.168.1.63', 58763, 0], [20, 843, '0.0.0.0', 0, 7303]] }
     : { up: 5583, reset: 2, crashphase: 12, tracelive: 44, grptrace: '00000000', loops: 2469, stepmax: 36455, stepmaxph: 51, ramfree: 128352, rammin: 8196, m4alive: 1, m4btn: 0, m4to: 0, m4crc: 0, m4gap: 0, m4snap: 0, m4snapbad: 0, m4dup: 0, m4bad: 0, link: 2, rssi: -64, wmode: 1, wup: 1, apup: 0, wip: '192.168.1.60', wsock: 1, wsockmax: 4, wsvc: [80], sock: [], outq: [[0, 0, 0], [1, 2, 340], [0, 0, 0]], qspit: 7168, qspif: 2632, sdok: 0, sdt: 0, sdf: 0, viewers: 1, pollhz: 1, wanthr: 0, authfail: 1, authlock: 0, authrej: 0 });
   const metrics = () => 'myio_build_info{version="' + version + '"} 1\nmyio_uptime_seconds 5583\nmyio_ram_free_bytes 128360\nmyio_ram_min_bytes 8196\nmyio_usens{ch="5"} 123.4\n';
   function r3route(req, url, body, send, res) {
@@ -567,6 +570,15 @@ var user=[${cfg.userExist.map((e, i) => (e && cfg.userRights[i] === 2 ? 1 : 0))}
       return true;
     }
     if (name === 'Restart') { r4.up = 3; return true; }
+    if (name === 'OtaCheck') {
+      const b = v3 ? fs3.s.files.get('/MYIO_NEW.BIN') : undefined;
+      if (!b || opts.otaNoKey) return true;
+      const ok = b.toString('latin1', 0, 4) === 'MYIO' && b.toString('hex', 24, 40) === due.chipid.toLowerCase() && b[b.length - 1] === 0x5A;
+      fs3.s.files.delete('/MYIO_NEW.BIN'); fs3.s.files.set(ok ? '/MYIO_OK.BIN' : '/MYIO_BAD.BIN', b);
+      if (ok) { const fw = b.readUInt32LE(8); version = `${fw >>> 16}.${(fw >>> 8) & 255}.${fw & 255}`; }
+      r4.up = 3; due.bank = 1;   // Bank1-trigger -> a Bank0 telepit (vagy hibanal a regi Bank1-et kapcsolja vissza) -> Bank1 indul
+      return true;
+    }
     return false;
   }
   const vline = (k, val) => `var ${k}=${typeof val === 'string' ? `'${val.replace(/'/g, "\\'")}'` : JSON.stringify(val).replace(/"/g, "'")};`;

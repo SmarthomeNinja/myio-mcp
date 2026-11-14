@@ -1,6 +1,6 @@
 {
   "name": "myio-mcp",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "MCP server for the myIO smart home controller (GIGA/Opta 4.x, Due 3.12)",
   "main": "dist/index.js",
   "type": "module",

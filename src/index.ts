@@ -37,7 +37,7 @@ import { registerIntegrationTools } from './tools/integr.js';
 import { registerBusTools } from './tools/bus.js';
 import type { WriteLevel } from './tools/common.js';
 
-export const VERSION = '1.6.0';
+export const VERSION = '1.6.1';
 
 const BASE_INSTRUCTIONS = `Tools for myIO smart home controllers (real hardware on the LAN; HTTP Basic auth).
 - Call myio_servers / myio_info first: the firmware version decides the feature set (3.12.x Due = base features; 4.x GIGA/Opta = everything).

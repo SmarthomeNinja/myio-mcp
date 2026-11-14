@@ -7,7 +7,10 @@ configure it through the controller's HTTP API.
 Plan and log (Hungarian): `../MYIO_MCP_PLAN.md`. The complete API the server is built on: [API_REFERENCE.md](./API_REFERENCE.md)
 (a copy of the firmware's own reference, Hungarian).
 
-## Status (1.6.0, 2026-10-26)
+## Status (1.6.1, 2026-11-13)
+
+1.6.1: `myio_system` restarts and updates a Due (3.12+) over the web too - the `MYIO_NEW.BIN` package is checked against the controller's
+chip ID before upload, and the answer says whether it was installed, rejected or cannot be installed (no device key).
 
 Rounds 0-5 of the plan: the February 2026 server fixed, put on tests, extended with the house entities, the configuration layer,
 automation (Flow rules, myIO Script programs), diagnostics / logs / files, every integration and RS485 expander - and in round 5 the MCP
@@ -87,7 +90,7 @@ layer: **resources**, **prompts**, **toolsets**, consistent **annotations** and 
 | `myio_mia` / `myio_mia_set` | integrations | MIA self-learning heating (4.11+): learned zone model, window detection, preheating; features, thresholds, exclusions, reset |
 | `myio_ledstrip` / `myio_ledstrip_set` | integrations | WS2812 strips (4.3.4+): strips, programs, effects; run/stop by event id, edit programs live |
 | `myio_network` / `myio_network_set` | integrations | host name, LAN, WiFi STA/AP, live addresses, services per interface; change + save or apply (admin, dangerous) |
-| `myio_system` | integrations | restart, web OTA upload / install / roll back (4.x, admin) - waits for the controller and reports the running version |
+| `myio_system` | integrations | restart, web OTA upload / install (GIGA/Opta: MYIO_UPD.BIN + roll back; Due 3.12+: MYIO_NEW.BIN to the SD card, checked for the controller's chip ID before upload), admin - waits for the controller and reports the running version and the outcome |
 | `myio_expanders` / `myio_expander_set` | expanders | Opta RS485 panels (4.5+): type, online, firmware, failsafe/standalone, AUX mode, Ext16 1-Wire |
 | `myio_knx` / `myio_knx_set` / `myio_knx_device` | expanders | Ext-KNX: group-address table with names, ETS tunnelling interface, devices; edit rows + KnxSave, scan / program addresses (admin) |
 | `myio_dali` / `myio_dali_set` | expanders | Ext-DALI (4.8.6+): endpoints, bindings, desired vs driver parameters, groups; bind, settings, groups, scan, commission (admin) |

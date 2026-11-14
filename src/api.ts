@@ -197,11 +197,11 @@ export class MyIOClient {
    * Parancs(ok) kuldese: string ("r_ON=16&PCA*2001=128") vagy {k: v} terkep -> POST /info.json.
    * A valasz az info.json (4.x es 3.12 is ezt adja a POST-ra); az allapotot a hivo olvassa vissza.
    */
-  async command(cmd: string | Record<string, string | number>): Promise<HttpResult> {
+  async command(cmd: string | Record<string, string | number>, opts: RequestOpts = {}): Promise<HttpResult> {
     const body = typeof cmd === 'string' ? cmd : Object.entries(cmd).map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join('&');
     if (!body) throw new MyIOError('empty command');
     if (Buffer.byteLength(body) > POST_BODY_MAX) throw new MyIOError(`command body is ${Buffer.byteLength(body)} B, the controller accepts at most ${POST_BODY_MAX} B per request - split it`);
-    const r = await this.request('POST', 'info.json', body);
+    const r = await this.request('POST', 'info.json', body, undefined, opts);
     this.check(r, 'command');
     return r;
   }

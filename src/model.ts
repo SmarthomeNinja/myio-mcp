@@ -165,7 +165,8 @@ export const FEAT = {
   mia: { v4: '4.11.0' } as MinVersion,
   ledstrip: { v4: '4.3.4' } as MinVersion,
   network: { v4: '4.0.0' } as MinVersion,
-  webOta: { v4: '4.0.0' } as MinVersion,
+  // Due: Restart + OtaCheck a 3.11 ota van, a csomag SD-re toltese (PUT ~sd/) a 3.12(.0) fajlkezelovel jott
+  webOta: { v3: '3.12.0', v4: '4.0.0' } as MinVersion,
   expanders: { v4: '4.5.0' } as MinVersion,
   knxNames: { v4: '4.15.0' } as MinVersion,
   knxIp: { v4: '4.14.0' } as MinVersion,

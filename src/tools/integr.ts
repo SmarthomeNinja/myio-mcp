@@ -9,7 +9,8 @@ import fs from 'node:fs';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { MyIOClient } from '../api.js';
 import { MyIOError } from '../api.js';
-import { FEAT, VarBlock, isV4, num, varr, vnum, vstr } from '../model.js';
+import { FEAT, InfoJson, VarBlock, isV4, num, varr, vnum, vstr } from '../model.js';
+import type { FmList } from '../model_diag.js';
 import { ToolContext, RO, WR_CFG, WR_CFG_SET, WR_ADM, text, fail, serverArg, sleep, gate, kv, sendCmds, toggleTo, setIf, maskSecret, SETTLE_MS } from './common.js';
 
 type J = Record<string, unknown>;
@@ -42,6 +43,88 @@ export const miaText = async (c: MyIOClient, zoneRelay?: number) => {
   if (!((j.zones as J[]) ?? []).length) L.push('  no zones (MIA learns thermostat outputs: a relay with a temperature activator)');
   return L.join('\n');
 };
+
+// ---- Due (3.12+) webes OTA: MYIO_NEW.BIN az SD gyokereben (forras: V3-fa ota_package.h + _OTA_dev.ino) ----
+// Fejlec (LE): "MYIO" | u16 format=1 | u16 hdr=64 | u32 fwVer | u32 raw | u32 padded | u32 crc | chipId[16] | iv[16] | res[8]; fajl = 64 + padded + 32 B HMAC.
+// Bank0-bol az OtaCheck szinkron telepit a Bank1-be (~10-20 s), csak utana valaszol; Bank1-bol csak trigger (flag torles + reset, a gyari
+// Bank0 telepit bootkor). Eredmeny az SD-n: NEW -> OK (siker) | BAD (elutasitva); kulcs nelkuli Bank0 a NEW-t bent hagyja.
+// A Due info.json-jaban NINCS uptime -> az ujraindulast a sysdiag.json up-ja jelzi.
+const DUE_NEW = 'MYIO_NEW.BIN', DUE_OK = 'MYIO_OK.BIN', DUE_BAD = 'MYIO_BAD.BIN';
+const DUE_BANK1_MAX = 0x3E000;
+function duePkgCheck(b: Buffer, chipid: unknown): string | { fw: string } {
+  if (b.length < 64 + 16 + 32) return `only ${b.length} B - not a firmware package`;
+  if (b.toString('latin1', 0, 4) !== 'MYIO') {
+    const sp = b.readUInt32LE(0);   // nyers SAM3X-image: az elso szo a stack-pointer (SRAM)
+    return sp >= 0x20000000 && sp <= 0x20088000 ? 'this is a raw firmware image (an Arduino build), not an OTA package - it has to be packed for this controller with the fleet tool (myio_fleet.py)' : 'not a myIO firmware package (no MYIO header)';
+  }
+  if (b.readUInt16LE(4) !== 1 || b.readUInt16LE(6) !== 64) return `package format ${b.readUInt16LE(4)} is not the Due format (1) - a GIGA/Opta package?`;
+  const raw = b.readUInt32LE(12), padded = b.readUInt32LE(16);
+  if (raw < 8 || raw > DUE_BANK1_MAX || padded < raw || padded >= raw + 16 || padded % 16) return 'invalid size fields in the package header';
+  if (b.length !== 64 + padded + 32) return `truncated or damaged package (${b.length} B, the header says ${64 + padded + 32} B)`;
+  const id = b.toString('hex', 24, 40), mine = String(chipid ?? '').toLowerCase();
+  if (/^[0-9a-f]{32}$/.test(mine) && id !== mine) return `the package was made for another controller (chip ID ${id}, this one is ${mine})`;
+  const v = b.readUInt32LE(8);
+  return { fw: `${v >>> 16}.${(v >>> 8) & 255}.${v & 255}` };
+}
+const dueUp = async (c: MyIOClient): Promise<number> => num((await c.getJson<J>('sysdiag.json')).up);
+/** SD-gyoker: nev -> "meret ido" (az atnevezes az idobelyeget megtartja, igy a feltoltott csomag az OK/BAD alatt is felismerheto -
+ *  azonos forrasbol az uj csomag meretre egyezhet a regi MYIO_OK.BIN-nel) */
+const dueSd = async (c: MyIOClient): Promise<Map<string, string>> =>
+  new Map(((await c.fm<FmList>('fm.json', { dir: '/' })).entries ?? []).filter(e => !e.d).map(e => [e.n.toUpperCase(), `${num(e.s)} ${e.t ?? ''}`]));
+/** mi lett a csomaggal: a fw atnevezi (NEW -> OK | BAD) */
+function dueOutcome(s0: Map<string, string>, s1: Map<string, string> | undefined): 'installed' | 'rejected' | 'pending' | 'unknown' {
+  const pkg = s0.get(DUE_NEW);
+  if (!s1 || !pkg) return 'unknown';
+  if (s1.has(DUE_NEW)) return 'pending';
+  const ok = s1.get(DUE_OK) === pkg && s0.get(DUE_OK) !== pkg, bad = s1.get(DUE_BAD) === pkg && s0.get(DUE_BAD) !== pkg;
+  return ok && !bad ? 'installed' : bad && !ok ? 'rejected' : 'unknown';
+}
+const DUE_REJECTED = `the package was REJECTED (renamed to ${DUE_BAD}): damaged, made for another controller or a wrong key - the serial console shows why`;
+const DUE_NOKEY = `${DUE_NEW} is still on the SD card: the base (bank 0) firmware has no device key (not a fleet build), so it cannot install packages - update it over USB once, then web OTA works`;
+
+async function dueSystem(c: MyIOClient, action: string, file: string | undefined, before: InfoJson['info']) {
+  if (action === 'ota_restore') return fail(`${c.name}: a Due keeps no previous image to switch back to - a rejected package leaves the running firmware in place. To go back, install the older version's package (downgrade is allowed) or flash it over USB.`);
+  if (action === 'ota_upload') {
+    if (!file) return fail(`file (local path of the ${DUE_NEW} package) is required`);
+    let buf: Buffer; try { buf = fs.readFileSync(file); } catch (e) { return fail(`cannot read ${file}: ${(e as Error).message}`); }
+    const chk = duePkgCheck(buf, before.chipid);
+    if (typeof chk === 'string') return fail(`${c.name}: ${file}: ${chk}`);
+    try { await c.put(`~sd/${DUE_NEW}`, buf, 'application/octet-stream', { timeoutMs: 900_000 }); }
+    catch (e) { return fail(`${(e as Error).message} - a Due takes the package only from its SD card`); }
+    return text(`${c.name}: ${DUE_NEW} uploaded to the SD card (${buf.length} B, firmware ${chk.fw}, made for this controller). Install it with action=ota_apply. Running now: ${before.version}.`);
+  }
+  let s0 = new Map<string, string>();
+  if (action === 'ota_apply') {
+    s0 = await dueSd(c);
+    if (!s0.has(DUE_NEW)) return fail(`${c.name}: no ${DUE_NEW} on the SD card - upload the package first (action=ota_upload)`);
+  }
+  const up0 = await dueUp(c);
+  const cmd = action === 'restart' ? 'Restart=1' : 'OtaCheck=1';
+  let lost = '';
+  try { await c.command(cmd, { timeoutMs: 120_000 }); }
+  catch (e) { if ((e as MyIOError).status) throw e; lost = (e as Error).message; }   // idotullepes / bontott kapcsolat: lehet, hogy mar flashel vagy ujraindul
+  const bank = (b: unknown) => (b === undefined ? '' : num(b) ? ', bank 1 (OTA image)' : ', bank 0 (base firmware)');
+  await sleep(8000);
+  let alive = 0;
+  for (let i = 0; i < 80; i++) {
+    let up = -1;
+    try { up = await dueUp(c); } catch { /* meg nincs fent */ }
+    if (up >= 0 && up < up0) {
+      const now = (await c.info(true)).info;
+      const o = action === 'ota_apply' ? dueOutcome(s0, await dueSd(c).catch(() => undefined)) : 'unknown';
+      return text(`${c.name}: ${action} done - back online after ~${8 + i * 3} s, running ${now.version} (was ${before.version})${bank(now.bank)}`
+        + (o === 'installed' ? ` - package installed (renamed to ${DUE_OK} on the SD card).` : o === 'rejected' ? ` - ${DUE_REJECTED}. The previous firmware runs.` : o === 'pending' ? ` - but ${DUE_NOKEY}.` : '.'));
+    }
+    if (up >= 0 && ++alive >= 2) {   // ket valasz ujraindulas nelkul: a fw nem inditott ujra (a RequestRestart 1,5 s-on belul resetel)
+      if (lost) return fail(`${c.name}: ${cmd} did not restart the controller - the command may not have arrived (${lost}); try again.`);
+      if (action === 'restart') return fail(`${c.name}: Restart=1 sent, but the controller did not restart.`);
+      const o = dueOutcome(s0, await dueSd(c).catch(() => undefined));
+      return fail(`${c.name}: OtaCheck sent, the controller did not restart - ${o === 'pending' ? DUE_NOKEY : o === 'rejected' ? `${DUE_REJECTED}. The running firmware ${before.version} is unchanged` : 'the serial console shows why'}.`);
+    }
+    await sleep(3000);
+  }
+  return fail(`${c.name}: sent ${cmd}, but the controller did not come back within ~4 minutes - check it on site / over USB.`);
+}
 
 export function registerIntegrationTools(server: McpServer, ctx: ToolContext): void {
   const { reg } = ctx;
@@ -526,9 +609,11 @@ export function registerIntegrationTools(server: McpServer, ctx: ToolContext): v
   // ============================================================ SYSTEM ======================================================
   server.registerTool('myio_system', {
     title: 'Restart / firmware update',
-    description: 'Admin actions on a GIGA/Opta (4.x): restart (soft reboot, ~1 min offline), ota_upload (file = local path of a MYIO_UPD.BIN package made by the fleet tool: uploaded to the SD card, '
-      + 'or internal flash without a card), ota_apply (the controller installs the uploaded package and restarts; rolls back by itself if the new image fails), ota_restore (go back to the previous image). '
-      + 'The answer waits for the controller to come back and reports the running version. Needs MYIO_WRITE=admin. A Due is updated over USB/SD only.',
+    description: 'Admin actions: restart (soft reboot, ~1 min offline), ota_upload (file = local path of the firmware package the fleet tool made for THIS controller - '
+      + 'GIGA/Opta (4.x): MYIO_UPD.BIN, uploaded to the SD card, or internal flash without a card; Due (3.12+): MYIO_NEW.BIN, SD card only, checked before upload: '
+      + 'a raw Arduino build or a package made for another controller is refused), ota_apply (the controller installs the uploaded package and restarts; a GIGA/Opta rolls back by itself '
+      + 'if the new image fails, a Due keeps its running firmware if the package is rejected), ota_restore (GIGA/Opta only: go back to the previous image). '
+      + 'The answer waits for the controller to come back and reports the running version and the outcome. Needs MYIO_WRITE=admin.',
     inputSchema: { action: z.enum(['restart', 'ota_upload', 'ota_apply', 'ota_restore']), file: z.string().optional(), server: S },
     annotations: WR_ADM,
   }, async ({ action, file, server: sv }) => {
@@ -536,6 +621,7 @@ export function registerIntegrationTools(server: McpServer, ctx: ToolContext): v
     const c = reg.pick(sv);
     await c.require(FEAT.webOta, 'web restart / OTA');
     const before = (await c.info(true)).info;
+    if (!isV4(before.version)) return dueSystem(c, action, file, before);
     if (action === 'ota_upload') {
       if (!file) return fail('file (local path of MYIO_UPD.BIN) is required');
       let buf: Buffer; try { buf = fs.readFileSync(file); } catch (e) { return fail(`cannot read ${file}: ${(e as Error).message}`); }

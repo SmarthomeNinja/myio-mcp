@@ -3,6 +3,8 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -170,11 +172,54 @@ test('expanders, DALI groups as desired values, DMX, Modbus decode + bus merge',
   assert.equal(r.isError, true);
 });
 
-test('system: restart waits for the reboot; Due refused', async () => {
+test('system: restart waits for the reboot (4.x and Due)', async () => {
   let r = await callText(client, 'myio_system', { action: 'restart' });
   assert.match(r.text, /restart done - back online/); assert.match(r.text, /running 4\.18\.7/);
   r = await callText(client, 'myio_system', { action: 'restart', server: 'Emelet' });
-  assert.equal(r.isError, true);
+  assert.match(r.text, /restart done - back online/); assert.match(r.text, /running 3\.12\.33 \(was 3\.12\.33\), bank 1 \(OTA image\)/);
   r = await callText(client, 'myio_system', { action: 'ota_upload', file: '/nonexistent/MYIO_UPD.BIN' });
   assert.equal(r.isError, true); assert.match(r.text, /cannot read/);
+});
+
+// Due-csomag a V3-fa ota_package.h szerint: 64 B fejlec + paddolt payload + 32 B HMAC; a mock "HMAC"-ja: utolso bajt 0x5A
+function duePkg({ chip = '0123456789abcdef0011223344556677', fw = [3, 12, 40], raw = 1000, good = true } = {}) {
+  const padded = Math.ceil(raw / 16) * 16, b = Buffer.alloc(64 + padded + 32, 0x11);
+  b.write('MYIO', 0, 'latin1'); b.writeUInt16LE(1, 4); b.writeUInt16LE(64, 6); b.writeUInt32LE((fw[0] << 16) | (fw[1] << 8) | fw[2], 8);
+  b.writeUInt32LE(raw, 12); b.writeUInt32LE(padded, 16); b.writeUInt32LE(0, 20); Buffer.from(chip, 'hex').copy(b, 24);
+  b[b.length - 1] = good ? 0x5A : 0x00;
+  return b;
+}
+
+test('system on a Due: package checks, upload + install, rejected package, base firmware without a device key', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'myio-ota-'));
+  const file = (n, b) => { const p = path.join(dir, n); fs.writeFileSync(p, b); return p; };
+  // friss mockok: a Restart utani up=3 mellett egy masodik ujraindulas nem latszana
+  const dOk = await startMock({ version: '3.12.33' }), dBad = await startMock({ version: '3.12.33' }), dKey = await startMock({ version: '3.12.33', otaNoKey: true });
+  const c = await connect({ MYIO_SERVERS: JSON.stringify([{ name: 'DueA', url: dOk.url }, { name: 'DueB', url: dBad.url }, { name: 'DueC', url: dKey.url }]) });
+  try {
+    let r = await callText(c, 'myio_system', { action: 'ota_restore', server: 'DueA' });
+    assert.equal(r.isError, true); assert.match(r.text, /no previous image/);
+    const rawImg = Buffer.alloc(200_000); rawImg.writeUInt32LE(0x20087FF0, 0);
+    r = await callText(c, 'myio_system', { action: 'ota_upload', file: file('raw.bin', rawImg), server: 'DueA' });
+    assert.equal(r.isError, true); assert.match(r.text, /raw firmware image/);
+    r = await callText(c, 'myio_system', { action: 'ota_upload', file: file('other.bin', duePkg({ chip: 'ff'.repeat(16) })), server: 'DueA' });
+    assert.equal(r.isError, true); assert.match(r.text, /made for another controller \(chip ID f{32}, this one is 0123456789abcdef0011223344556677\)/);
+    const giga = duePkg(); giga.writeUInt16LE(3, 4);
+    r = await callText(c, 'myio_system', { action: 'ota_upload', file: file('giga.bin', giga), server: 'DueA' });
+    assert.equal(r.isError, true); assert.match(r.text, /format 3 is not the Due format/);
+    r = await callText(c, 'myio_system', { action: 'ota_apply', server: 'DueA' });
+    assert.equal(r.isError, true); assert.match(r.text, /no MYIO_NEW\.BIN on the SD card/);
+    assert.ok(!dOk.log.some(x => x.startsWith('PUT')), 'nothing uploaded so far');
+
+    const good = duePkg(), bad = duePkg({ good: false });
+    for (const [sv, b] of [['DueA', good], ['DueB', bad], ['DueC', good]]) {
+      r = await callText(c, 'myio_system', { action: 'ota_upload', file: file(`${sv}.bin`, b), server: sv });
+      assert.match(r.text, new RegExp(`MYIO_NEW\\.BIN uploaded to the SD card \\(${b.length} B, firmware 3\\.12\\.40, made for this controller\\)`));
+    }
+    assert.ok(dOk.log.includes(`PUT /~sd/MYIO_NEW.BIN ${good.length}`), dOk.log.join(','));
+    const [a, b, k] = await Promise.all(['DueA', 'DueB', 'DueC'].map(sv => callText(c, 'myio_system', { action: 'ota_apply', server: sv })));
+    assert.match(a.text, /ota_apply done - back online/); assert.match(a.text, /running 3\.12\.40 \(was 3\.12\.33\), bank 1 \(OTA image\) - package installed/);
+    assert.equal(b.isError, false); assert.match(b.text, /running 3\.12\.33 \(was 3\.12\.33\)/); assert.match(b.text, /REJECTED \(renamed to MYIO_BAD\.BIN\).*The previous firmware runs/);
+    assert.equal(k.isError, true); assert.match(k.text, /did not restart - MYIO_NEW\.BIN is still on the SD card: the base \(bank 0\) firmware has no device key/);
+  } finally { await c.close(); await dOk.close(); await dBad.close(); await dKey.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
