@@ -1,11 +1,57 @@
 # myIO MCP Server
 
-Model Context Protocol (MCP) server for the **myIO smart home controller** (Arduino GIGA / Finder Opta 4.x and Arduino Due 3.12).
-It lets an AI assistant (Claude Desktop, Claude Code, any MCP client) read the state of the house and switch, dim and
-configure it through the controller's HTTP API.
+**Talk to your home.** myIO MCP connects AI assistants such as Claude to a [myIO](https://myio.hu/en/)
+smart home controller, so you can ask the house in plain words how warm the children's room is, what
+happened today, or to lower the blinds.
 
-Plan and log (Hungarian): `../MYIO_MCP_PLAN.md`. The complete API the server is built on: [API_REFERENCE.md](./API_REFERENCE.md)
-(a copy of the firmware's own reference, Hungarian).
+myIO is a central home controller developed in Hungary by myIO Smart Home Zrt. It sits on a DIN rail in
+the distribution cabinet and runs heating and cooling, lighting, blinds, gates and energy in one system,
+on its own, without the internet. This is a free, open-source Model Context Protocol (MCP) server for it:
+it runs on your own computer and reaches the controller over your home network, through its HTTP API.
+
+## Example
+
+A real conversation in Claude Desktop, translated from Hungarian:
+
+> **You:** How warm is it in the house right now, room by room?
+>
+> **Claude** *(used myIO-MCP)*: Right now (20:02), according to the controller:
+>
+> | Room | Temperature |
+> |---|---|
+> | Bedroom | 23.6 °C |
+> | Bedroom bathroom | 23.3 °C |
+> | Study | 26.0 °C |
+>
+> It is 5.3 °C outside, and the heating flow water is at 32.3 °C. The study is noticeably warmer than the
+> others. Only the upstairs myIO controller is reachable, so I have no data on the ground-floor rooms.
+>
+> **You:** Switch on the study lamp and lower the blinds upstairs.
+>
+> **Claude** *(used myIO-MCP)*: The study lamp is on, and all 9 upstairs blinds are going down: bedroom
+> (terrace door, east, south), study, walk-in closet, guest bedroom, bathroom, staircase and guest bathroom.
+>
+> One thing worth knowing: your own "Upstairs blinds DOWN" group does not include the study blind, and
+> there is also a "Study blind down lock" switch. It is off right now, so I lowered the study blind too.
+> If it was left out of the group on purpose, tell me and I'll raise it again.
+
+## Quick start (Claude Desktop)
+
+1. Download [myio-mcp.mcpb](https://smarthomeninja.hu/files/myio-mcp.mcpb).
+2. Open it with a double click (or in Claude Desktop: Settings → Extensions).
+3. Enter the controller's address (e.g. `http://192.168.1.178`), a user name and the password. Then ask.
+
+Create a separate myIO user for the assistant, and choose how far it may go: switch only (`state`),
+change settings too (`config`, the default) or everything (`admin`). Claude Code and other MCP clients:
+see [Configuration](#configuration).
+
+Works with every myIO controller: V3 (Arduino Due, firmware 3.12), V4 GIGA and V4 Opta (firmware 4.x).
+Features that only exist on V4 answer with a clear error on a V3.
+More: [Talk to your home](https://myio.hu/en/blog/talk-to-your-home) ·
+[Downloads](https://myio.hu/en/downloads) · [API reference](./API_REFERENCE.md) (Hungarian)
+
+> **Privacy:** the MCP server runs locally, but the AI assistant runs on its provider's servers. Your
+> questions, and what it reads to answer them (e.g. temperatures, output names), reach the provider.
 
 ## Status (1.6.1, 2026-11-13)
 
@@ -243,4 +289,4 @@ Layout: `src/api.ts` (HTTP client + command dispatch), `src/model.ts` (JSON → 
 
 ## License
 
-MIT
+MIT, see [LICENSE](./LICENSE).
