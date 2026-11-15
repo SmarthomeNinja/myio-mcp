@@ -53,7 +53,11 @@ More: [Talk to your home](https://myio.hu/en/blog/talk-to-your-home) ·
 > **Privacy:** the MCP server runs locally, but the AI assistant runs on its provider's servers. Your
 > questions, and what it reads to answer them (e.g. temperatures, output names), reach the provider.
 
-## Status (1.6.1, 2026-11-13)
+## Status (1.6.2, 2026-11-15)
+
+1.6.2: works better from outside the home network (port forwarding, DDNS) - when the controller answers a remote read with
+503 and Retry-After (it serves heavy requests from other networks at most every few seconds), the server waits and tries again, at
+most twice; writes are never repeated. Several controllers in the Claude Code plugin (`claude-plugin/`).
 
 1.6.1: `myio_system` restarts and updates a Due (3.12+) over the web too - the `MYIO_NEW.BIN` package is checked against the controller's
 chip ID before upload, and the answer says whether it was installed, rejected or cannot be installed (no device key).

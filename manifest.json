@@ -2,7 +2,7 @@
   "manifest_version": "0.2",
   "name": "myio-mcp",
   "display_name": "myIO-MCP",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "description": "MCP server for the myIO smart home controller: outputs, thermostats, shutters, RGB, sensors, timers, scenes, users, Flow rules, scripts, diagnostics, logs, files, Shelly, MQTT, Cloud, alarm, MIA, network, KNX, DALI, DMX, Modbus - with read-back, several controllers, resources (live state, logs, docs) and prompts (heating overview, why does X not switch, daily diagnostics, new Flow rule)",
   "author": {
     "name": "SmarthomeNinja",

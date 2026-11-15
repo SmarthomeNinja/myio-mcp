@@ -1,6 +1,6 @@
 {
   "name": "myio-mcp",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "mcpName": "io.github.SmarthomeNinja/myio-mcp",
   "description": "MCP server for the myIO smart home controller: Claude and other AI assistants read and control heating, lighting, blinds and energy over the local network",
   "keywords": [

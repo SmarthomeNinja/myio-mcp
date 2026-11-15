@@ -8,12 +8,12 @@
     "url": "https://github.com/SmarthomeNinja/myio-mcp",
     "source": "github"
   },
-  "version": "1.6.1",
+  "version": "1.6.2",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "myio-mcp",
-      "version": "1.6.1",
+      "version": "1.6.2",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

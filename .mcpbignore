@@ -6,3 +6,4 @@ test/
 .claude
 .vscode
 scripts/
+claude-plugin/

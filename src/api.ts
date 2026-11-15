@@ -66,12 +66,25 @@ export class MyIOClient {
    *  (a Due HTTP-je sorozatos keresek utan atmenetileg elutasit) - POST-ot NEM ismetlunk (egy billeno parancs ketszer = visszabillen) */
   request(method: string, path: string, body?: string | Buffer, contentType?: string, opts: RequestOpts = {}): Promise<HttpResult> {
     return this.enqueue(async () => {
-      try { return await this.rawRequest(method, path, body, contentType, opts); }
-      catch (e) {
-        const msg = (e as Error).message;
-        if (method === 'GET' && /ECONNREFUSED|ECONNRESET|socket hang up/.test(msg)) { await new Promise(r => setTimeout(r, 1500)); return this.rawRequest(method, path, body, contentType, opts); }
-        throw e;
+      const once = async () => {
+        try { return await this.rawRequest(method, path, body, contentType, opts); }
+        catch (e) {
+          const msg = (e as Error).message;
+          if (method === 'GET' && /ECONNREFUSED|ECONNRESET|socket hang up/.test(msg)) { await new Promise(r => setTimeout(r, 1500)); return this.rawRequest(method, path, body, contentType, opts); }
+          throw e;
+        }
+      };
+      let r = await once();
+      // WAN-fek (fw 4.8.10+ / Due 3.12.27+): mas alhalozatbol (port-forward, DDNS) jovo kliens nehez GET-jere 503 + Retry-After;
+      // kivarjuk es ujraprobaljuk, legfeljebb ketszer, legfeljebb 10 s-ot (a sorban: kozben mas keres sem megy ki erre a vezerlore)
+      for (let i = 0; i < 2 && method === 'GET' && r.status === 503; i++) {
+        const ra = Number(r.headers['retry-after']);
+        const s = Number.isFinite(ra) && ra >= 0 ? ra : 3;
+        if (s > 10) break;
+        await new Promise(res => setTimeout(res, s * 1000 + 100));
+        r = await once();
       }
+      return r;
     });
   }
 
@@ -119,6 +132,7 @@ export class MyIOClient {
     if (r.status === 429) throw new MyIOError(`${this.name}: login brake (429) - too many wrong passwords from this IP; wait ${r.headers['retry-after'] ?? '?'} s`, 429);
     if (r.status === 403) throw new MyIOError(`${this.name}: forbidden (403) - this user level cannot access ${what}`, 403);
     if (r.status === 404) throw new MyIOError(`${this.name}: ${what} not found (404) - not supported by this firmware or user level`, 404);
+    if (r.status === 503) throw new MyIOError(`${this.name}: controller busy (503) for ${what} - from outside the home network it serves heavy requests at most every few seconds; try again later${r.headers['retry-after'] ? ` (Retry-After ${r.headers['retry-after']} s)` : ''}`, 503);
     if (r.status !== 200) throw new MyIOError(`${this.name}: HTTP ${r.status} for ${what}`, r.status);
   }
 
