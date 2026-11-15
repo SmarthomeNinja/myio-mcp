@@ -29,7 +29,7 @@ When you enable the plugin, Claude Code asks for:
 
 - **myIO controller URL**, for example `http://192.168.1.178`;
 - **myIO user name** and **password**. The password is kept in your system's secure credential store. Use a myIO user whose permissions match what Claude may do: Claude can only do what that user is allowed to;
-- **Write level**: `state` (switch only), `config` (default; also settings) or `admin` (also users, network and updates);
+- **Write level**: `state` (default; switch only), `config` (also settings) or `admin` (also users, network and updates);
 - **Tool groups** (optional, default `all`), to load fewer tools.
 
 **Several controllers:** fill in *Several controllers* with a JSON array, for example `[{"name":"Ground floor","url":"http://192.168.1.178","username":"admin","password":"..."},{"name":"First floor","url":"http://192.168.1.177","username":"admin","password":"..."}]`, and leave the single URL empty. Claude then names the controller in each request.

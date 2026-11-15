@@ -11,6 +11,7 @@
   "homepage": "https://myio.hu/en/blog/talk-to-your-home",
   "repository": "https://github.com/SmarthomeNinja/myio-mcp",
   "license": "MIT",
+  "privacyPolicyUrl": "https://myio.hu/en/privacy",
   "keywords": [
     "myio",
     "smart-home",
@@ -56,8 +57,8 @@
     "write_level": {
       "type": "string",
       "title": "Write level",
-      "description": "What Claude may change: state (switch only), config (also settings) or admin (also users, network, updates)",
-      "default": "config"
+      "description": "What Claude may change: state (default; switch only), config (also settings) or admin (also users, network, updates)",
+      "default": "state"
     },
     "toolsets": {
       "type": "string",
