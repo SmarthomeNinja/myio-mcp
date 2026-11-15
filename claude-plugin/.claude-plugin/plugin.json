@@ -1,0 +1,69 @@
+{
+  "name": "myio",
+  "displayName": "myIO Smart Home",
+  "version": "1.0.0",
+  "description": "Work with a myIO smart home controller: answers from the official myIO documentation, step-by-step troubleshooting and, in Claude Code, reading and controlling your own controller over the home network.",
+  "author": {
+    "name": "myIO Smart Home Zrt.",
+    "email": "info@myio.hu",
+    "url": "https://myio.hu"
+  },
+  "homepage": "https://myio.hu/en/blog/talk-to-your-home",
+  "repository": "https://github.com/SmarthomeNinja/myio-mcp",
+  "license": "MIT",
+  "keywords": [
+    "myio",
+    "smart-home",
+    "home-automation",
+    "heating",
+    "lighting",
+    "blinds",
+    "documentation"
+  ],
+  "userConfig": {
+    "base_url": {
+      "type": "string",
+      "title": "myIO controller URL",
+      "description": "Address of your myIO controller, for example http://192.168.1.178. Leave empty if you fill in Several controllers.",
+      "default": ""
+    },
+    "username": {
+      "type": "string",
+      "title": "myIO user name",
+      "description": "A myIO user; its permissions limit what Claude can read and change",
+      "default": ""
+    },
+    "password": {
+      "type": "string",
+      "title": "myIO password",
+      "description": "Password of that myIO user (kept in the system's secure credential store)",
+      "sensitive": true,
+      "default": ""
+    },
+    "name": {
+      "type": "string",
+      "title": "Controller label",
+      "description": "Name used for this controller in Claude's replies",
+      "default": "myIO"
+    },
+    "servers": {
+      "type": "string",
+      "title": "Several controllers (optional)",
+      "description": "For more than one controller: a JSON array such as [{\"name\":\"Ground floor\",\"url\":\"http://192.168.1.178\",\"username\":\"admin\",\"password\":\"...\"}]. Overrides the URL, user name and password above.",
+      "sensitive": true,
+      "default": ""
+    },
+    "write_level": {
+      "type": "string",
+      "title": "Write level",
+      "description": "What Claude may change: state (switch only), config (also settings) or admin (also users, network, updates)",
+      "default": "config"
+    },
+    "toolsets": {
+      "type": "string",
+      "title": "Tool groups",
+      "description": "Tool groups to load, for example house,automation (all = every group)",
+      "default": "all"
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "myio-docs": {
+      "type": "http",
+      "url": "https://docs-mcp.myio.hu/mcp"
+    },
+    "myio": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "myio-mcp@1.6.2"
+      ],
+      "env": {
+        "MYIO_BASE_URL": "${user_config.base_url}",
+        "MYIO_USERNAME": "${user_config.username}",
+        "MYIO_PASSWORD": "${user_config.password}",
+        "MYIO_NAME": "${user_config.name}",
+        "MYIO_SERVERS": "${user_config.servers}",
+        "MYIO_WRITE": "${user_config.write_level}",
+        "MYIO_TOOLSETS": "${user_config.toolsets}"
+      }
+    }
+  }
+}
