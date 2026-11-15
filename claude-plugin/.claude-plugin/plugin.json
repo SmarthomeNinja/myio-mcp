@@ -12,6 +12,8 @@
   "repository": "https://github.com/SmarthomeNinja/myio-mcp",
   "license": "MIT",
   "privacyPolicyUrl": "https://myio.hu/en/privacy",
+  "documentationUrl": "https://github.com/SmarthomeNinja/myio-mcp#readme",
+  "supportUrl": "https://myio.hu/en/support",
   "keywords": [
     "myio",
     "smart-home",
