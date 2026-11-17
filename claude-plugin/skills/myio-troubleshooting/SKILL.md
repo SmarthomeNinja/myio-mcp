@@ -15,7 +15,7 @@ myIO is a smart home controller made by myIO Smart Home Zrt. (Hungary): myIO Ser
 
 ## 2. Look at the controller, when its tools are available
 
-The myIO MCP tools (`myio_find`, `myio_get_status`, `myio_output_config`, `myio_logs`, `myio_sysdiag` and the rest) are there in Claude Code when the controller connection is set up. Read before you answer:
+The controller's tools (`myio_find`, `myio_get_status`, `myio_output_config`, `myio_logs`, `myio_sysdiag` and the rest) are there when the user has connected their controller: with the myIO Smart Home connector through the myIO Cloud, or with myIO MCP on the home network. When they are missing, work from what the user tells you; a V4 controller with myIO Cloud can be connected by pairing, see https://myio.hu/en/blog/talk-to-your-home. Read before you answer:
 
 - An item that does not switch: find it with `myio_find`, read its state and output configuration, then everything that controls it: buttons, timers, thermostat, protection pairs, groups, Flow rules and scripts. Read the day's event log lines for it with `myio_logs`.
 - A health check: `myio_sysdiag` (restarts and their cause, free memory, network link), the day's error lines in the event log, expanders, the clock.

@@ -57,7 +57,8 @@ More: [Talk to your home](https://myio.hu/en/blog/talk-to-your-home) ·
 
 1.6.2: works better from outside the home network (port forwarding, DDNS) - when the controller answers a remote read with
 503 and Retry-After (it serves heavy requests from other networks at most every few seconds), the server waits and tries again, at
-most twice; writes are never repeated. Several controllers in the Claude Code plugin (`claude-plugin/`).
+most twice; writes are never repeated. The Claude plugin in `claude-plugin/` bundles the myIO documentation server, the cloud
+connector and two skills; it does not start this local server.
 
 1.6.1: `myio_system` restarts and updates a Due (3.12+) over the web too - the `MYIO_NEW.BIN` package is checked against the controller's
 chip ID before upload, and the answer says whether it was installed, rejected or cannot be installed (no device key).
