@@ -790,7 +790,8 @@ a párosításkor generált ECDSA-kulcs és a hozzárendelt user-slot dönti el.
 
 | `myioc/<devId>/status` | eszköz→bróker (retained) | `online` / `offline` — LWT, **[4.5]** *és* szándékolt lezáráskor (kikapcsolás, bróker-váltás) kiadott búcsú-üzenet |
 | `myioc/<devId>/evt` | eszköz→bróker | események (pl. `pair-ok:<keyId>`) |
-| `myioc/<devId>/perm/<keyId>` | eszköz→bróker (retained) | a kulcs slotjának jog-leírója (lásd lent) |
+| `myioc/<devId>/perm/<keyId>` | eszköz→bróker (retained) | a kulcs slotjának jog-leírója (lásd lent); **[4.25]** `"x":{"t":1,"cm":880,"ur":1\|2,"fw":"<verzió>"}` képesség-mező |
+| `myioc/<devId>/perm/<keyId>/rsp` | eszköz→bróker | **[4.25]** a kulcsra titkosított válasz-chunkok: aláírt olvasás + parancs-nyugta (lásd lent) |
 | `myioc/<devId>/stat` | eszköz→bróker (retained) | állapot-publikálás (későbbi kör) |
 | `myioc/vendor/msg` | gyártó→flotta (sub, QoS0, **retained**) | **[4.5]** gyártói csatorna — vendor-aláírt boríték (lásd lent) |
 
@@ -800,7 +801,51 @@ ECDSA P-256 aláírás a `SHA-256(ver‖keyId‖counter‖cmdLen‖command)` fö
 **telefonján tárolt privát** kulcsával; az eszköz a párosításkor kapott **publikus**
 kulccsal ellenőriz. A `command` a nyers parancs-string (pl. `r_ON=5`), és a kulcshoz
 kötött **user-slot jogaival** fut (CheckUserPermission változatlanul érvényes). Replay-védelem:
-kulcsonként szigorúan monoton `counter` (floor QSPI-n, +64-es előre-ablakkal perzisztálva).
+kulcsonként szigorúan monoton `counter` (floor QSPI-n, +64-es — **[4.25]** +1024-es — előre-ablakkal
+perzisztálva). A `command` sapkája 192 bájt, **[4.25]** 880 bájt (a kliens a jog-leíró `x.cm` mezőjéből tudja).
+
+**Foglalt parancsok** (nem jutnak a parancs-értelmezőbe): `clbye` — a keretet aláíró kulcs önmagát törli;
+**[4.25]** `clget:<off>,<len>:<út>` — aláírt olvasás, lásd lent.
+
+**[4.25] Olvasó-alagút és parancs-nyugta** (`_CloudGet.ino`, `cloud_rsp.h`). A `/cmd`-re küldött
+`clget:<off>,<len>:<út>` keretre a vezérlő a web-kiszolgáló **változatlan** kezelőjét futtatja a kulcs
+user-slotjának jogaival, és a választ a `myioc/<devId>/perm/<keyId>/rsp` témán küldi vissza
+(nem retained). `<off>` = az ablak kezdete, `<len>` = a kért hossz (0 = a legnagyobb ablak: GIGA 61 440,
+Opta 12 288 bájt); a kliens a következő ablakot új kéréssel kéri.
+
+- **Fehérlista (csak olvasó végpontok).** Bármely jog: `info.json`, a `sens_out`/`sens_IO` család,
+  `fm.json` (user-jogú fióknak a saját `/users` fa). Editor: `usensor.json`, `sysdiag.json`, `metrics`,
+  `flowtrace.json`, `prog.json`, `ai.json`, `shelly.json`, `shellyscan.json`, `alarm.json`, `link.json`,
+  `linkscan.json`, `brstat.json`, `ledfx.json`, `dali.json`, `dmx.json`, `modbus.json`, `mbval.json`, és a
+  beállító oldalak (`setup`, `output`, `input`, `pcaout`, `groups`, `broadlink`, `computherm`, `shelly`,
+  `link`, `sensors`, `mqtt`, `ledstrip`, `sg`, `ai`, `alarm`, `expander`, `dali`, `dmx`, `modbus`, `knx`,
+  `emanager`). Fájl: a statikus út (bármely jog, a `prog/` user-jognak tiltott), `~q/` és `~sd/` (editor).
+- **Felhőn át soha:** a `cloud`, `network`, `users`, `userpermissions` oldal, az állapotváltó
+  fájlkezelő-GET-ek (`fm_del`, `fm_ren`, `fm_cp`, `fm_mkdir`, `fm_sync`), a `.jsn` beállítás-fájlok
+  (jelszót hordozhatnak; kivétel: `flows.jsn`), a `..`-t tartalmazó út, a rejtett rendszer-kötet.
+- **Válasz-chunk** (a `/perm/<keyId>/rsp` payloadja):
+  `[ver(1)=1][flags(1)][ctr(4 BE)][seq(2 BE)][salt(4 BE)] ‖ AES-256-GCM(K, nonce, plain) ‖ tag(16)`,
+  `nonce = salt‖ctr‖seq‖00 00`, AAD = a 12 bájtos fejléc. `ctr` = a kérés számlálója (a válasz ezzel
+  párosítható), `seq` = chunk-sorszám, `flags`: bit0 = jön még chunk, bit1 = a tartalom teljes HTTP-válasz
+  (státuszsor + fejlécek + törzs), bit2 = parancs-nyugta. A 0. chunk nyílt szövege 10 bájtos fejléccel kezd:
+  `[status(2 BE)][total(4 BE)][off(4 BE)]` (HTTP-szerű státusz; `total` = a teljes tartalom hossza).
+  A plain chunkonként legfeljebb 800 bájt.
+- **Kulcs:** `K = SHA-256("myIO-rsp1" ‖ X ‖ devPub(64) ‖ upub(64))`, ahol `X` az ECDH P-256 közös pont
+  x-koordinátája (eszköz-privát × a kulcs publikus fele; a kliens a párosító link `dp` mezőjéből számolja).
+  **Miért titkosított:** egy eszköz minden párosított kliense ugyanazzal a bróker-fiókkal olvas, a válasz
+  viszont a kérő kulcs jogaival készül.
+- **Parancs-nyugta:** minden végrehajtott aláírt parancsra egy chunk (bit2): `200` (+ a fw üzenete),
+  `400` (a fw hibaüzenete), `403` (jog-megtagadás vagy felhőn át tiltott parancs).
+- **Hibák:** `400` hibás kérés, `403` felhőn át nem elérhető, `404` nincs ilyen, `503` `busy` (egyszerre egy
+  válasz készül) / `no memory`.
+
+**[4.25] A felhős kulcs korlátai** (minden kulcsra, az appéra is): legfeljebb **editor** jog (admin jogú
+slot kulcsa is editorként fut), és tiltott parancsnevek: felhasználók és jogok (`userName`, `pwd`, `rights`,
+`new_userSlot`, `del_userSlot`, `permissionsUser`, `*Permission`), `cl_*`, `CloudSave`, `n_*`, `NetApply`,
+`NetSave`, `lo_net`, `sav_net`, `ip`, `subnet`, `gateway`, `mac`, `ethernetInitTimer`, `OtaCheck`, `Restart`,
+`RdpLock`, `RestorePrevious`, `ReInit`, `LogOut`. A tiltott név `403`-as nyugtát és `deny:` eseményt ad.
+Eseménynapló: `System,CLOUD,cmd-ok|cmd-deny|cmd-block,<slot>,k<keyId>,<parancs, 48 karakter>` (a jelszót
+hordozó párok értéke kicsillagozva).
 
 **Párosítás-keret** (a `/pair` payloadja, csak admin-nyitott 5 perces ablakban):
 `[ver(1)=2][keyId(1)][upub(64)][mac(32)]`, ahol `mac = HMAC-SHA256(ptok, ver‖keyId‖upub)`

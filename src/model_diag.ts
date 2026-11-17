@@ -17,7 +17,10 @@ export function fmtSysdiag(j: Record<string, unknown>, v4: boolean): string {
   const L: string[] = [];
   L.push(`uptime ${dur(n(j.up))}, last reset: ${RESET_CAUSE[n(j.reset)] ?? j.reset}${j.crashphase !== undefined ? ` (previous run ended in loop phase ${j.crashphase})` : ''}`);
   L.push(`main loop ${j.loops} rounds/s; longest step since boot ${j.stepmax ?? '?'} ms in phase ${j.stepmaxph ?? '?'}${j.loopmax !== undefined ? `; longest round ${j.loopmax} ms (phase ${j.loopmaxph})` : ''}`);
-  L.push(`free RAM ${n(j.ramfree)} B (minimum since boot ${n(j.rammin)} B)`);
+  // a fw a minimumot 8196-rol inditja, es csak akkor irja felul, ha a szabad RAM ez ala esik -> a 8196 nem meres, hanem a
+  // kezdoertek ("soha nem esett 8 KB ala"); kulonben a valodi legkisebb ertek
+  const rmin = Number(j.rammin);
+  L.push(`free RAM ${n(j.ramfree)} B (${rmin === 8196 ? 'never below 8 KB since boot; the firmware tracks no finer minimum' : `minimum since boot ${n(j.rammin)} B`})`);
   if (j.m4alive !== undefined) L.push(`M4 button core: ${n(j.m4alive) ? 'alive' : 'NOT RESPONDING'}, button events ${j.m4btn}, timeouts ${j.m4to}, CRC errors ${j.m4crc}, gaps ${j.m4gap}, duplicates ${j.m4dup}, bad ${j.m4bad}${n(j.m4snap) ? `, OLD M4 image snapshots ${j.m4snap} (flash the M4)` : ''}`);
   const link = n(j.link);
   L.push(`LAN link: ${link === 1 ? 'UP' : link === 2 ? 'DOWN' : 'no LAN hardware'}${j.reinits !== undefined ? `, W5500 re-inits ${j.reinits}` : ''}${j.reaped !== undefined ? `, reaped sockets ${j.reaped}` : ''}`);

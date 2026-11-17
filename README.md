@@ -83,7 +83,7 @@ layer: **resources**, **prompts**, **toolsets**, consistent **annotations** and 
 - integrations: Shelly, myIO Link, MQTT, myIO Cloud, SG-Ready, alarm panel (SIA), MIA, LED strips, network, restart / web OTA; Opta expanders:
   failsafe / AUX / 1-Wire, KNX (table, names, ETS interface, device programming), DALI, DMX, Modbus RTU. Toggle-type settings are always
   given as desired values; passwords, keys and tokens are never returned; a value containing `&` is refused (the firmware cannot receive it)
-- write level (`MYIO_WRITE` = state | config | admin) limits what the AI may change
+- write level (`MYIO_WRITE` = read | state | config | admin) limits what the AI may change
 - MCP layer: resources (`myio://<controller>/state` ...), four prompts in Hungarian and English that read the controller first, toolsets
   (`MYIO_TOOLSETS`) to save context, annotations that follow one rule set, Streamable HTTP for other LAN clients (bearer token)
 - zod input schemas, mock controller + end-to-end tests (`npm test`, 72 tests), restoring live tests for a bench controller
@@ -235,7 +235,7 @@ Environment variables (the Claude Desktop extension asks for them as *user confi
 | `MYIO_USERNAME` / `MYIO_PASSWORD` | HTTP Basic auth; the account's permission level limits what the tools can do |
 | `MYIO_NAME` | label used in replies (default: the host) |
 | `MYIO_SERVERS` | several controllers: JSON array `[{"name":"Ground floor","url":"http://192.168.1.178","username":"admin","password":"..."}, ...]` - overrides the three above; tools take `server: "<name>"` |
-| `MYIO_WRITE` | write level: `state` (outputs, thermostat targets, usens, run flows / scripts, SG mode), `config` (default; also names, timers, scenes, structures, input/output configuration, thermostat sensor binding, Flow / script files, integration settings), `admin` (also users, permissions, system files, network, Cloud keys, restart / OTA) |
+| `MYIO_WRITE` | write level: `read` (read-only tools only; nothing can be changed), `state` (outputs, thermostat targets, usens, run flows / scripts, SG mode), `config` (default; also names, timers, scenes, structures, input/output configuration, thermostat sensor binding, Flow / script files, integration settings), `admin` (also users, permissions, system files, network, Cloud keys, restart / OTA) |
 | `MYIO_TOOLSETS` | tool groups to load (see Toolsets), default all |
 | `MYIO_HTTP_PORT` / `MYIO_HTTP_HOST` / `MYIO_HTTP_TOKEN` / `MYIO_STDIO` | optional Streamable HTTP transport (see above) |
 | `MYIO_TIMEOUT_MS` | HTTP timeout, default 10000 |

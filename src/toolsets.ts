@@ -42,15 +42,23 @@ export function parseToolsets(raw: string | undefined): ToolsetChoice {
   return { enabled, warnings };
 }
 
-/** a modul-regisztralo ezen at regisztral: a ki nem valasztott keszlet eszkozei nem kerulnek a szerverre */
-export function toolsetView(server: McpServer, set: Toolset, enabled: Set<Toolset>, registered?: Set<string>): McpServer {
+/** eszkozonkenti szuro a regisztraciokor: a registerTool masodik parametere (title, description, annotations ...) alapjan */
+export type ToolFilter = (name: string, config: { annotations?: { readOnlyHint?: boolean } } | undefined) => boolean;
+
+/** a modul-regisztralo ezen at regisztral: a ki nem valasztott keszlet (vagy a szuron fennakado) eszkozei nem kerulnek a szerverre */
+export function toolsetView(server: McpServer, set: Toolset, enabled: Set<Toolset>, registered?: Set<string>, filter?: ToolFilter): McpServer {
   return new Proxy(server, {
     get(target, prop, recv) {
       if (prop === 'registerTool') {
         return (name: string, ...rest: unknown[]) => {
           const s: Toolset = set === 'core' && LEGACY.test(name) ? 'legacy' : set;
           if (!enabled.has(s)) return undefined;
+          if (filter && !filter(name, rest[0] as Parameters<ToolFilter>[1])) return undefined;
           registered?.add(name);
+          // a Claude Connectors Directory portalja a cimet az annotations.title-ben keresi (a felso szintu title nem eleg):
+          // a felso szintu cim ide is bekerul, ha az annotacio meg nem hordozza
+          const cfg = rest[0] as { title?: string; annotations?: Record<string, unknown> } | undefined;
+          if (cfg?.title && cfg.annotations && cfg.annotations.title === undefined) rest[0] = { ...cfg, annotations: { ...cfg.annotations, title: cfg.title } };
           return (target.registerTool as (...a: unknown[]) => unknown).call(target, name, ...rest);
         };
       }

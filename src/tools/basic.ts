@@ -30,7 +30,7 @@ export function registerBasicTools(server: McpServer, ctx: ToolContext): void {
 
   server.registerTool('myio_info', {
     title: 'myIO controller info',
-    description: 'Identify the controller: serial, firmware version, CPU/board, device name, element counts (RQ relays, SQ inputs, PCAQ PCA channels, SHQ Shelly, SENQ universal sensors), the permission level of this account (0 admin, 1 editor, 2 user), uptime, found I2C expanders and storage health. Call this first: the version decides which features exist (3.12.x = Due, only base features; 4.x = GIGA/Opta, all features).',
+    description: 'Identify the controller: serial, firmware version, CPU/board, device name, element counts (RQ relays, SQ inputs, PCAQ PCA channels, SHQ Shelly, SENQ universal sensors), the permission level of this account (0 admin, 1 editor, 2 user), uptime, found I2C expanders and storage health. The firmware version decides which features exist (3.12.x = Due, only base features; 4.x = GIGA/Opta, all features).',
     inputSchema: { server: S },
     annotations: RO,
   }, async ({ server: sv }) => {

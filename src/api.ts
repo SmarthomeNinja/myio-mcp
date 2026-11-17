@@ -1,36 +1,20 @@
 /**
  * myIO REST-kliens (MYIO_MCP_PLAN.md 3. es 5. fej., 0. kor 2026-10-25; 1. kor: verzio-kapu, bemenetek, usensor.json).
  *
- * - node:http / node:https (a regi curl+execSync ut kivezetve: a fejlec-case hiba 2026-07-18 ota javitva a fw-ben,
- *   a node:http a fejlec-neveket ugy kuldi, ahogy adjuk - regi fw-nek is jo -, es insecureHTTPParser-rel a kezzel irt
- *   fw-valaszokat is elfogadja).
- * - EGY keres egyszerre vezerlonkent (a vezerlon 3 listen-socket van), Connection: close.
+ * - A szallitas cserelheto (CLOUD_MCP_PLAN.md 11. fej., 2026-11-15): alapbol HttpTransport (a vezerlo HTTP-API-ja az otthoni
+ *   halon, src/http_transport.ts); a felhos szerver ugyanezt az osztalyt a sajat transzportjaval hasznalja.
  * - Parancsok POST /info.json torzsben (a GET /command: ut NEM URL-dekodol, az ekezetes nev elromlana); torzs <= 1024 B.
  * - A parancs valasza nem tartalmazza az uj allapotot: a visszaolvasas a hivo (tools/) dolga.
  *
  * Igazsagforras: SD_Files/js/lang/HU/API_REFERENCE.md (a csomagban: API_REFERENCE.md).
  */
-import http from 'node:http';
-import https from 'node:https';
-import net from 'node:net';
 import { FEAT, InfoJson, MinVersion, Snapshot, UsensJson, VarBlock, minText, parseVarBlock, supports } from './model.js';
+import { MyIOError } from './transport.js';
+import type { HttpResult, RequestOpts, ServerConfig, Transport } from './transport.js';
+import { HttpTransport } from './http_transport.js';
 
-export interface ServerConfig {
-  name: string;              // a vezerlo cimkeje (tobb vezerlonel a tool `server` parametere)
-  baseUrl: string;           // http://192.168.1.178[:80]
-  username?: string;
-  password?: string;
-  timeoutMs?: number;        // alap 10 000
-  minGapMs?: number;         // ket keres kozti minimalis szunet (alap 150; a Due W5500-as HTTP-je a sorozatos kereseket elutasitja)
-  insecureParser?: boolean;  // alap true: a fw kezzel irt HTTP-valaszai (Renderer-Mode fejlec stb.) ne akadjanak fenn a szigoru parseren
-}
-
-export class MyIOError extends Error {
-  constructor(message: string, public readonly status?: number) { super(message); this.name = 'MyIOError'; }
-}
-
-export interface HttpResult { status: number; headers: http.IncomingHttpHeaders; text: string; body: Buffer; }
-export interface RequestOpts { timeoutMs?: number; }
+export { MyIOError } from './transport.js';
+export type { HttpResult, RawResult, RequestOpts, ServerConfig, Transport } from './transport.js';
 
 export const POST_BODY_MAX = 1024;   // a fw POST-torzs plafonja (API-ref 13.)
 const INFO_TTL_MS = 60_000;          // info.json gyorsitotar
@@ -38,101 +22,31 @@ const NAMES_TTL_MS = 10 * 60_000;    // d_sens_out.json (nevek) gyorsitotar - a 
 
 export class MyIOClient {
   readonly name: string;
-  readonly url: URL;
-  private readonly auth?: string;
-  private readonly timeoutMs: number;
-  private readonly insecure: boolean;
-  private readonly minGapMs: number;
-  private lastDone = 0;
-  private chain: Promise<unknown> = Promise.resolve();
+  readonly transport: Transport;
   private infoCache?: { at: number; info: InfoJson };
   private namesCache?: { at: number; snap: Snapshot };
   private setupCache?: { at: number; vb: VarBlock };
-  requests = 0;
 
-  constructor(cfg: ServerConfig) {
+  /** ServerConfig = a vezerlo HTTP-n (HttpTransport); { name, transport } = barmely mas szallitas (felhos szerver) */
+  constructor(cfg: ServerConfig | { name: string; transport: Transport }) {
     this.name = cfg.name;
-    this.url = new URL(cfg.baseUrl.includes('://') ? cfg.baseUrl : 'http://' + cfg.baseUrl);
-    if (!this.url.pathname.endsWith('/')) this.url.pathname += '/';
-    if (cfg.username) this.auth = 'Basic ' + Buffer.from(`${cfg.username}:${cfg.password ?? ''}`).toString('base64');
-    this.timeoutMs = cfg.timeoutMs ?? 10_000;
-    this.insecure = cfg.insecureParser ?? true;
-    this.minGapMs = cfg.minGapMs ?? 150;
+    this.transport = 'transport' in cfg ? cfg.transport : new HttpTransport(cfg);
   }
 
-  get origin(): string { return this.url.origin; }
+  get origin(): string { return this.transport.origin; }
+  get requests(): number { return this.transport.requests; }
 
-  /** sorba allitott keres: egyszerre egy megy ki a vezerlore; olvaso (GET) keresnel egy ujraproba kapcsolat-elutasitasra/-megszakadasra
-   *  (a Due HTTP-je sorozatos keresek utan atmenetileg elutasit) - POST-ot NEM ismetlunk (egy billeno parancs ketszer = visszabillen) */
   request(method: string, path: string, body?: string | Buffer, contentType?: string, opts: RequestOpts = {}): Promise<HttpResult> {
-    return this.enqueue(async () => {
-      const once = async () => {
-        try { return await this.rawRequest(method, path, body, contentType, opts); }
-        catch (e) {
-          const msg = (e as Error).message;
-          if (method === 'GET' && /ECONNREFUSED|ECONNRESET|socket hang up/.test(msg)) { await new Promise(r => setTimeout(r, 1500)); return this.rawRequest(method, path, body, contentType, opts); }
-          throw e;
-        }
-      };
-      let r = await once();
-      // WAN-fek (fw 4.8.10+ / Due 3.12.27+): mas alhalozatbol (port-forward, DDNS) jovo kliens nehez GET-jere 503 + Retry-After;
-      // kivarjuk es ujraprobaljuk, legfeljebb ketszer, legfeljebb 10 s-ot (a sorban: kozben mas keres sem megy ki erre a vezerlore)
-      for (let i = 0; i < 2 && method === 'GET' && r.status === 503; i++) {
-        const ra = Number(r.headers['retry-after']);
-        const s = Number.isFinite(ra) && ra >= 0 ? ra : 3;
-        if (s > 10) break;
-        await new Promise(res => setTimeout(res, s * 1000 + 100));
-        r = await once();
-      }
-      return r;
-    });
+    return this.transport.request(method, path, body, contentType, opts);
   }
 
-  private enqueue<T>(fn: () => Promise<T>): Promise<T> {
-    const run = async () => {
-      const wait = this.lastDone + this.minGapMs - Date.now();
-      if (wait > 0) await new Promise(r => setTimeout(r, wait));
-      try { return await fn(); } finally { this.lastDone = Date.now(); }
-    };
-    const p = this.chain.then(run, run);
-    this.chain = p.catch(() => undefined);
-    return p;
-  }
-
-  private rawRequest(method: string, path: string, body?: string | Buffer, contentType?: string, opts: RequestOpts = {}): Promise<HttpResult> {
-    return new Promise((resolve, reject) => {
-      const u = new URL(path.replace(/^\//, ''), this.url);
-      const mod = u.protocol === 'https:' ? https : http;
-      const timeoutMs = opts.timeoutMs ?? this.timeoutMs;
-      const headers: Record<string, string> = { Connection: 'close', Accept: '*/*' };
-      if (this.auth) headers.Authorization = this.auth;
-      if (body !== undefined) {
-        headers['Content-Type'] = contentType ?? 'application/x-www-form-urlencoded';
-        headers['Content-Length'] = String(Buffer.byteLength(body));
-      }
-      this.requests++;
-      const req = mod.request({
-        protocol: u.protocol, hostname: u.hostname, port: u.port || (u.protocol === 'https:' ? 443 : 80),
-        method, path: u.pathname + u.search, headers, timeout: timeoutMs, insecureHTTPParser: this.insecure,
-      }, res => {
-        const chunks: Buffer[] = [];
-        res.on('data', (c: Buffer) => chunks.push(c));
-        res.on('end', () => { const b = Buffer.concat(chunks); resolve({ status: res.statusCode ?? 0, headers: res.headers, text: b.toString('utf8'), body: b }); });
-        res.on('error', e => reject(new MyIOError(`${this.name}: response error: ${e.message}`)));
-      });
-      req.on('timeout', () => req.destroy(new MyIOError(`${this.name}: timeout after ${timeoutMs} ms (${method} ${u.pathname})`)));
-      req.on('error', e => reject(e instanceof MyIOError ? e : new MyIOError(`${this.name}: cannot reach ${this.url.origin} (${e.message}) - is the controller on and the URL right?`)));
-      if (body !== undefined) req.write(body);
-      req.end();
-    });
-  }
-
-  private check(r: HttpResult, what: string): void {
-    if (r.status === 401) throw new MyIOError(`${this.name}: unauthorized (401) - check MYIO_USERNAME / MYIO_PASSWORD`, 401);
-    if (r.status === 429) throw new MyIOError(`${this.name}: login brake (429) - too many wrong passwords from this IP; wait ${r.headers['retry-after'] ?? '?'} s`, 429);
+  private check(r: { status: number; headers?: HttpResult['headers'] }, what: string): void {
+    const h = r.headers ?? {};
+    if (r.status === 401) throw new MyIOError(`${this.name}: unauthorized (401) - ${this.transport.authHint}`, 401);
+    if (r.status === 429) throw new MyIOError(`${this.name}: login brake (429) - too many wrong passwords from this IP; wait ${h['retry-after'] ?? '?'} s`, 429);
     if (r.status === 403) throw new MyIOError(`${this.name}: forbidden (403) - this user level cannot access ${what}`, 403);
     if (r.status === 404) throw new MyIOError(`${this.name}: ${what} not found (404) - not supported by this firmware or user level`, 404);
-    if (r.status === 503) throw new MyIOError(`${this.name}: controller busy (503) for ${what} - from outside the home network it serves heavy requests at most every few seconds; try again later${r.headers['retry-after'] ? ` (Retry-After ${r.headers['retry-after']} s)` : ''}`, 503);
+    if (r.status === 503) throw new MyIOError(`${this.name}: controller busy (503) for ${what} - from outside the home network it serves heavy requests at most every few seconds; try again later${h['retry-after'] ? ` (Retry-After ${h['retry-after']} s)` : ''}`, 503);
     if (r.status !== 200) throw new MyIOError(`${this.name}: HTTP ${r.status} for ${what}`, r.status);
   }
 
@@ -220,32 +134,11 @@ export class MyIOClient {
     return r;
   }
 
-  /**
-   * Nyers GET TCP-n: a fw egyes vegpontjai (req*.js var-blokkok) HTTP-fejlec NELKUL valaszolnak, amit az http-parser eldob.
-   * Ha van fejlec, levagjuk (401/403 -> hiba); ha nincs, a torzs megy vissza ugy, ahogy jott.
-   */
-  rawGet(path: string): Promise<string> {
-    return this.enqueue(() => new Promise<string>((resolve, reject) => {
-      const u = new URL(path.replace(/^\//, ''), this.url);
-      const sock = net.connect({ host: u.hostname, port: Number(u.port) || 80 }, () => {
-        sock.write(`GET ${u.pathname}${u.search} HTTP/1.1\r\nHost: ${u.host}\r\n${this.auth ? `Authorization: ${this.auth}\r\n` : ''}Connection: close\r\n\r\n`);
-      });
-      const chunks: Buffer[] = [];
-      sock.setTimeout(this.timeoutMs, () => sock.destroy(new MyIOError(`${this.name}: timeout after ${this.timeoutMs} ms (raw GET ${u.pathname})`)));
-      sock.on('data', (c: Buffer) => chunks.push(c));
-      sock.on('error', e => reject(e instanceof MyIOError ? e : new MyIOError(`${this.name}: cannot reach ${this.url.origin} (${e.message})`)));
-      sock.on('close', () => {
-        this.requests++;
-        const all = Buffer.concat(chunks).toString('utf8');
-        if (all.startsWith('HTTP/')) {
-          const m = /^HTTP\/\d\.\d (\d{3})/.exec(all); const code = m ? parseInt(m[1], 10) : 0;
-          const sep = all.indexOf('\r\n\r\n'); const sep2 = all.indexOf('\n\n');
-          const body = sep >= 0 ? all.slice(sep + 4) : sep2 >= 0 ? all.slice(sep2 + 2) : '';
-          try { this.check({ status: code, headers: {}, text: body, body: Buffer.alloc(0) }, u.pathname); } catch (e) { reject(e); return; }
-          resolve(body);
-        } else resolve(all);
-      });
-    }));
+  /** nyers GET: a fw egyes vegpontjai (req*.js var-blokkok) HTTP-fejlec NELKUL valaszolnak; ha van fejlec, 401/403/404 -> hiba */
+  async rawGet(path: string): Promise<string> {
+    const r = await this.transport.rawGet(path);
+    if (!r.headerless) this.check(r, '/' + path.replace(/^\//, ''));
+    return r.text;
   }
 
   /** a /setup oldal JS var-blokkja: globalisok, jelenetek, szerkezetek, kimenet-/bemenet-konfig, nevek (editor/admin); 20 s gyorsitotar */
@@ -291,7 +184,7 @@ export class MyIOClient {
    *  Valasz: "OK <bajtszam>" (200) vagy "ERR rx=<n>" (500). A fw nem atomikusan ir (elobb torol). */
   async put(path: string, content: string | Buffer, contentType = 'application/octet-stream', opts: RequestOpts = {}): Promise<number> {
     const body = typeof content === 'string' ? Buffer.from(content, 'utf8') : content;
-    const r = await this.request('PUT', path, body, contentType, { timeoutMs: opts.timeoutMs ?? Math.max(this.timeoutMs, 10_000 + body.length / 20) });
+    const r = await this.request('PUT', path, body, contentType, { timeoutMs: opts.timeoutMs ?? Math.max(this.transport.timeoutMs, 10_000 + body.length / 20) });
     if (r.status === 500) throw new MyIOError(`${this.name}: upload of ${path} failed on the controller (${r.text.trim()}) - storage full or path invalid?`, 500);
     this.check(r, `PUT ${path}`);
     const m = /OK\s+(\d+)/.exec(r.text);

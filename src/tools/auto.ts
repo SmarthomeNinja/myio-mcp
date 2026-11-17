@@ -114,13 +114,13 @@ export function registerAutomationTools(server: McpServer, ctx: ToolContext): vo
       + 'AND t=sens | scmp | out{id, on 0|1} | twin{from, to, days} | var; THEN t=rel|grp{id, act 0 off/1 on/2 toggle} | pca|fet{id, val 0..255} | delay{s|m} | var{id, op:set|inc|dec, val} | log{val} | msg | http{id: webhook slot, val}. '
       + 'days = bitmask bit0=Mon..bit6=Sun (127 = every day); minutes of day for time/twin; temperatures x10 (21.5 °C = 215). Full reference: myio_reference topic=flow. Editor/admin level.',
     inputSchema: {
-      flow: z.record(z.any()).optional().describe('{"id":1,"name":"...","en":1,"when":{...},"and":[...],"then":[...]}'),
+      flow: z.record(z.string(), z.any()).optional().describe('{"id":1,"name":"...","en":1,"when":{...},"and":[...],"then":[...]}'),
       delete: z.number().int().optional().describe('flow id to delete'),
       variable: z.object({ id: z.number().int(), name: z.string().optional(), init: z.number().int().optional() }).optional(),
       delete_variable: z.number().int().optional(),
       hook: z.object({ id: z.number().int(), name: z.string().optional(), met: z.number().int().optional(), url: z.string(), body: z.string().optional(), err: z.number().int().optional(), gap: z.number().int().optional() }).optional(),
       delete_hook: z.number().int().optional(),
-      file: z.union([z.string(), z.record(z.any())]).optional().describe('the complete flows.jsn (replaces everything)'),
+      file: z.union([z.string(), z.record(z.string(), z.any())]).optional().describe('the complete flows.jsn (replaces everything)'),
       dry_run: z.boolean().optional(),
       server: S,
     },

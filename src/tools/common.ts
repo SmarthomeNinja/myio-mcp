@@ -8,16 +8,19 @@ import { MyIOClient, MyIOError, POST_BODY_MAX } from '../api.js';
 import { Device, Snapshot, Usens, Thermostat, decodeDevices, decodeUsens, decodeSensors, decodeThermostats, fmtDevice, supports, FEAT } from '../model.js';
 import type { Registry } from '../servers.js';
 
-export type WriteLevel = 'state' | 'config' | 'admin';
+export const WRITE_LEVELS = ['read', 'state', 'config', 'admin'] as const;
+export type WriteLevel = (typeof WRITE_LEVELS)[number];
 export interface ToolContext {
   reg: Registry; write: WriteLevel;
   /** a tenylegesen regisztralt eszkozok neve (MYIO_TOOLSETS utan) - a promptok csak ezekre hivatkoznak */
   tools?: Set<string>;
+  /** az iras-szint kapu hibaszovege (alap: a MYIO_WRITE-ra hivatkozo); mas szallitasnal (felhos szerver) mast kell irni */
+  gateMessage?: (need: WriteLevel, have: WriteLevel) => string;
 }
-const LEVELS: WriteLevel[] = ['state', 'config', 'admin'];
-/** iras-szint kapu (MYIO_WRITE): null = mehet, kulonben a hiba-valasz */
+/** iras-szint kapu (MYIO_WRITE): null = mehet, kulonben a hiba-valasz. A 'read' szinten az iro eszkozok fel sem kerulnek (server.ts). */
 export function gate(ctx: ToolContext, need: WriteLevel): CallToolResult | null {
-  if (LEVELS.indexOf(ctx.write) >= LEVELS.indexOf(need)) return null;
+  if (WRITE_LEVELS.indexOf(ctx.write) >= WRITE_LEVELS.indexOf(need)) return null;
+  if (ctx.gateMessage) return fail(ctx.gateMessage(need, ctx.write));
   return fail(`This tool changes ${need === 'admin' ? 'users / system settings' : 'configuration'} and the server runs with MYIO_WRITE=${ctx.write}. Set MYIO_WRITE=${need} (or admin) in the server configuration to allow it.`);
 }
 

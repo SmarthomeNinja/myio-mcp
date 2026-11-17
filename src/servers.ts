@@ -51,7 +51,12 @@ export function parseServerConfigs(env: NodeJS.ProcessEnv = process.env): Server
 function hostOf(url: string): string { try { return new URL(url.includes('://') ? url : 'http://' + url).host; } catch { return url; } }
 
 export function buildRegistry(cfgs: ServerConfig[]): Registry {
-  const clients = cfgs.map(c => new MyIOClient(c));
+  return registryOf(cfgs.map(c => new MyIOClient(c)));
+}
+
+/** kesz kliensekbol (barmely transzporttal - pl. a felhos szerver munkamenetenkent) */
+export function registryOf(clients: MyIOClient[]): Registry {
+  if (!clients.length) throw new MyIOError('no controller configured');
   const names = clients.map(c => c.name);
   const slugs: string[] = [];
   for (const c of clients) { let s = slugOf(c.name); for (let k = 2; slugs.includes(s); k++) s = `${slugOf(c.name)}-${k}`; slugs.push(s); }

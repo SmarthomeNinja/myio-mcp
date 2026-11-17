@@ -533,7 +533,7 @@ export function registerIntegrationTools(server: McpServer, ctx: ToolContext): v
       + 'program edits (prog 1..32 with fields {fx, speed, brightness, intensity, density, length, palette, direction, color1, color2 (0xRRGGBB number), a, b, blend, blend_fx, blend_dir, kill, kill_fx, kill_dir, off_pause}, name) '
       + 'applied live and saved (ls_save); led_count {io 1..8, count} needs a restart. Editor/admin level.',
     inputSchema: { event: z.number().int().optional(), enabled: z.boolean().optional(), prog: z.number().int().min(1).max(32).optional(), name: z.string().max(15).optional(),
-      fields: z.record(z.number()).optional(), led_count: z.object({ io: z.number().int().min(1).max(8), count: z.number().int().min(0) }).optional(), server: S },
+      fields: z.record(z.string(), z.number()).optional(), led_count: z.object({ io: z.number().int().min(1).max(8), count: z.number().int().min(0) }).optional(), server: S },
     annotations: WR_CFG,
   }, async (a) => {
     const cfg = a.prog !== undefined || a.enabled !== undefined || a.led_count !== undefined;

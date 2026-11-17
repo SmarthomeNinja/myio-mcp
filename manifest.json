@@ -72,7 +72,7 @@
     "MYIO_WRITE": {
       "type": "string",
       "title": "Write level",
-      "description": "What the AI may change: state (switch outputs, thermostat targets, run Flow rules / scripts, SG mode, LED events), config (also names, timers, scenes, structures, Flow rules, scripts, files, integration and expander settings), admin (also users, permissions, system files, network, Cloud keys, restart / OTA, KNX/DALI addressing)",
+      "description": "What the AI may change: read (nothing - read-only tools only), state (switch outputs, thermostat targets, run Flow rules / scripts, SG mode, LED events), config (also names, timers, scenes, structures, Flow rules, scripts, files, integration and expander settings), admin (also users, permissions, system files, network, Cloud keys, restart / OTA, KNX/DALI addressing)",
       "required": false,
       "sensitive": false,
       "default": "config"
