@@ -416,7 +416,8 @@ user-szintű (távoli IP-ket mutat), a `/network`-höz hasonlóan editor/admin j
 ```
 
 - `up` uptime (s), `reset` reset-ok (ld. `info.json` `reset_cause`), `crashphase`/`grptrace`/`tracelive` crash-nyomkövetés, `loops` loop/mp.
-- `ramfree`/`rammin` szabad SRAM most / min. watermark (**bájt**).
+- `ramfree`/`rammin` szabad SRAM most / min. watermark (**bájt**). **[4.26.2]** a `rammin` a boot óta mért valódi
+  mélypont; 4.26.1-ig 8196-ról indult, és csak ez alá esve íródott felül (GIGA / Opta: gyakorlatilag mindig 8196).
 - `m4*` az M4 társmag gombszkenner-diagja (ld. `info.json` `m4btn`…). [4.5.7] `m4snap`: hányszor jött RÉGI (rövidebb) elrendezésű M4-pillanatkép, amit az M7 előtag-módban fogadott el (>0 = az M4-image lemaradt az M7 mögött, M4-flash javasolt; a gombok ettől még mennek); `m4snapbad`: értelmezhetetlen méretű, eldobott pillanatképek. Naplósor az első eszlelésnél: `System,M4-SNAPSHOT,size=,expected=`.
 - `link` W5500 link (1=UP, 2=DOWN, -1=nincs HW), `rssi` WiFi jelerősség (dBm, 0=n/a).
 - `wmode` WiFi mód (0=OFF, 1=STA, 2=AP), `wup` STA csatlakozva (0/1), `apup` AP aktív (0/1), `wip` STA IP-cím. **WiFi per-socket kijelzés NINCS**: az mbed LWIP nem tesz ki HW-regisztert/PCB-listát, ezért a WiFinél csak link/RSSI/IP érhető el (a web-UI RSSI-trendgrafikonként mutatja).
@@ -464,6 +465,10 @@ Minden ebben a fejezetben: **editor/admin** szint — KIVÉVE a `users/` fát (l
 
 - `GET /<útvonal>` — statikus fájl a belső flash-ről (SD-kártya tartalék); a Due-n
   közvetlenül az SD-kártyáról. MIME kiterjesztésből: `.js .json .jsn .css .csv .htm .html .ico .xml`.
+  **[4.26.2]** user-jogú (2) fióknak **404**: a `prog/` fa, a `..`-t tartalmazó út, és minden `.jsn`
+  beállítás-fájl (jelszót / kulcsot hordozhatnak: `mqtt.jsn`, `net.jsn`, `shelly.jsn`, `link.jsn` …), kivéve a
+  `js/`, `htm/`, `dict/` és `users/` alatti fájlokat. A vizsgálat nem kis-nagybetű-érzékeny, és az SD-kártyás
+  tartalékra is érvényes. Admin / editor: változatlan. (4.26.1-ig a user-jogú fiók ezeket olvashatta.)
 - `GET /<útvonal>?v=<webRev>` **[3.12.5+ / 4.3.10+]** — ugyanaz a fájl, **cache-bélyeggel**. A
   `?v=` jelenlétében a válasz `Cache-Control: max-age=31536000, immutable`, enélkül
   `Cache-Control: no-cache`. A bélyeg értéke a lap fejlécében kiadott `var webRev`
@@ -1895,7 +1900,8 @@ hibaszöveg, és a lokális változók `név=érték` soronként. `!progreload*<
   mellékhatás-mentesek.
 - Aktivátoros (termosztát-vezérelt) kimenetre a parancs elutasítva (precedens: a Link sem alkalmaz
   távoli állapotot ilyen kimenetre). Minden parancs a proxy-rétegen (védelem/csatoló/időzítő).
-- A `prog/N.txt` statikus úton minden hitelesített usernek kiszolgálódik → **a forrásban titok nincs**;
+- A `prog/N.txt`-t a statikus út user-jogú (2) fióknak nem adja ki (404; **[4.26.2]** az SD-kártyás
+  tartalék-ágon sem — addig a tükrözött fájl onnan kijött) → **a forrásban ettől még ne legyen titok**;
   a `/~q/prog/` út user-jog 2-nek 403.
 - Reserved-String: a pool egyszeri SDRAM-foglalás (`MqttTlsSdramAlloc`, GIGA ≈ 104 KB: 16 ×
   `ProgSlot` + 128 trace), a loop alatt nulla heap; Optán belső heap (init-körű), felezett sapkák.
