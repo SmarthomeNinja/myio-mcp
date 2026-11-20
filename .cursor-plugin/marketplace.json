@@ -1,0 +1,17 @@
+{
+  "name": "myio",
+  "owner": {
+    "name": "myIO Smart Home Zrt.",
+    "email": "info@myio.hu"
+  },
+  "metadata": {
+    "description": "myIO smart home plugins"
+  },
+  "plugins": [
+    {
+      "name": "myio",
+      "source": "cursor-plugin",
+      "description": "Read and control your myIO smart home controller on your home network, with answers from the official myIO documentation."
+    }
+  ]
+}

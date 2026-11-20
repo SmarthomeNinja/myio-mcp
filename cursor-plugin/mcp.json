@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "myio-docs": {
+      "url": "https://docs-mcp.myio.hu/mcp"
+    },
+    "myio": {
+      "command": "npx",
+      "args": ["-y", "myio-mcp@1.6.2"],
+      "env": {
+        "MYIO_BASE_URL": "${MYIO_BASE_URL}",
+        "MYIO_USERNAME": "${MYIO_USERNAME}",
+        "MYIO_PASSWORD": "${MYIO_PASSWORD}",
+        "MYIO_WRITE": "${MYIO_WRITE}"
+      }
+    }
+  }
+}
