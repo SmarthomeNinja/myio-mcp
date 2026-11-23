@@ -217,7 +217,7 @@ export function registerBasicTools(server: McpServer, ctx: ToolContext): void {
   // ---- nyers parancs ---------------------------------------------------------------------------------------------------
   server.registerTool('myio_send_command', {
     title: 'Raw myIO command',
-    description: 'Send raw command(s) to the controller, chained with &, e.g. "r_ON=16&r_OFF=5&PCA*2001=128" (PCA level is RAW 0..255). Covers everything in the API reference: thresholds min_temp_ON*<id>=<x10>, names r_descr*<id>=<text>, timers r_timer*<id>=<s>, scene load lo_all=<slot>, button simulation s_hit=<id>, usens*<id>=<x10> etc. Toggle-type config commands (relaysInvert=<id>, PCA_PWM=<id>...) INVERT the flag - read the current value first. Body limit 1024 bytes. The reply lists which outputs changed state.',
+    description: 'Send raw command(s) to the controller, chained with &, e.g. "r_ON=16&r_OFF=5&PCA*2001=128" (PCA level is RAW 0..255). Covers everything in the API reference: thresholds min_temp_ON*<id>=<x10>, names r_descr*<id>=<text>, timers r_timer*<id>=<s>, scene load lo_all=<slot>, button simulation s_hit=<id>, usens*<id>=<x10> etc. Toggle-type config commands (relaysInvert=<id>, PCA_PWM=<id>...) INVERT the flag - read the current value first. A request body holds at most 1023 bytes on 4.x and 255 bytes on a Due 3.x; a longer chain is split at the & boundaries into several requests, in order. The reply lists which outputs changed state.',
     inputSchema: { commands: z.string().min(1).describe('command string, key=value pairs joined with &'), server: S },
     annotations: WR_CFG,   // nyers parancs: barmi lehet (konfig, admin is)
   }, async ({ commands, server: sv }) => applyDiff(reg.pick(sv), commands));

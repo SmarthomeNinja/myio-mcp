@@ -4,8 +4,9 @@
  */
 import { z } from 'zod';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { MyIOClient, MyIOError, POST_BODY_MAX } from '../api.js';
-import { Device, Snapshot, Usens, Thermostat, decodeDevices, decodeUsens, decodeSensors, decodeThermostats, fmtDevice, supports, FEAT } from '../model.js';
+import { MyIOClient, MyIOError } from '../api.js';
+import { Device, Snapshot, Usens, Thermostat, decodeDevices, decodeUsens, decodeSensors, decodeThermostats, fmtDevice, supports, FEAT, isV4 } from '../model.js';
+import { normPath } from '../model_diag.js';
 import type { Registry } from '../servers.js';
 
 export const WRITE_LEVELS = ['read', 'state', 'config', 'admin'] as const;
@@ -16,6 +17,8 @@ export interface ToolContext {
   tools?: Set<string>;
   /** az iras-szint kapu hibaszovege (alap: a MYIO_WRITE-ra hivatkozo); mas szallitasnal (felhos szerver) mast kell irni */
   gateMessage?: (need: WriteLevel, have: WriteLevel) => string;
+  /** a Modbus busz-felderites + sablon-gyujtemeny eszkozei (BuildOptions.modbusDiscovery) - alapbol KI, lasd tools/mbdisc.ts */
+  modbusDisc?: boolean;
 }
 /** iras-szint kapu (MYIO_WRITE): null = mehet, kulonben a hiba-valasz. A 'read' szinten az iro eszkozok fel sem kerulnek (server.ts). */
 export function gate(ctx: ToolContext, need: WriteLevel): CallToolResult | null {
@@ -63,6 +66,19 @@ export async function usensOrEmpty(client: MyIOClient): Promise<Usens[]> {
   try { return decodeUsens(await client.usensors()).list; } catch { return []; }
 }
 
+/**
+ * napi CSV-naplo (ev_log/, c_log/, ...) GET-utja. vol nelkul 4.x-en a csupasz statikus ut (a fw sorrendje: belso flash, majd SD).
+ * Due 3.x: a csupasz ut nem letezo fajlra (3.12.44 elott) valasz nelkul bont ("socket hang up", mintha a vezerlo elerhetetlen lenne),
+ * ezert szerkeszto/admin fiok a ~sd/ uton olvas (404-et ad; a Due-nak csak SD-je van); user-fioknak a ~sd/ tiltott, ott marad a csupasz ut.
+ */
+export async function logUrl(client: MyIOClient, path: string, vol?: 'q' | 's'): Promise<string> {
+  const { info } = await client.info();
+  const v4 = isV4(String(info.version ?? ''));
+  const p = normPath(path);
+  if (v4 ? vol : vol || Number(info.right ?? 2) < 2) return `${v4 && vol === 'q' ? '~q' : '~sd'}${p}`;
+  return p.slice(1);
+}
+
 /** szenzor-vezerelt kimenetek (termosztat-zonak) elo ertekekkel */
 export async function thermostatsOf(client: MyIOClient): Promise<Thermostat[]> {
   const { list, live, names } = await devices(client);
@@ -108,7 +124,7 @@ export async function applyDiff(client: MyIOClient, cmd: string, head?: string):
   const after = await devices(client);
   const bmap = new Map(before.list.map(d => [d.id, d]));
   const changed = after.list.filter(a => { const b = bmap.get(a.id); return b && (b.on !== a.on || b.level !== a.level); });
-  const lines = [head ?? `Sent: ${cmd} (HTTP ${r.status})`];
+  const lines = [head ?? `Sent: ${cmd} (HTTP ${r.status}${r.parts > 1 ? `, split into ${r.parts} requests at command boundaries - the ${client.name} limit is ${await client.bodyMax()} B per request` : ''})`];
   lines.push(changed.length ? 'Outputs that changed:\n' + changed.map(a => `  ${fmtDevice(a)}   (was ${bmap.get(a.id)!.on ? 'ON' : 'OFF'}${a.type !== 'relay' && a.level !== undefined ? ` ${bmap.get(a.id)!.level}/255` : ''})`).join('\n')
     : 'No output state changed (config command, no-op, no permission, or the input has no action bound - verify with myio_get_status).');
   return text(lines.join('\n'));
@@ -125,13 +141,17 @@ export function kv(key: string, value: string | number): string {
   if (s.includes('&')) throw new MyIOError(`the value for ${key} contains "&" - the controller cannot receive that character (it splits commands on it); choose a value without "&"`);
   return `${key}=${encodeURIComponent(s)}`;
 }
-/** parancsok sorrendtartoan, POST-onkent max 1024 B-os darabokban (a POST-ot sosem ismeteljuk) */
-export async function sendCmds(client: MyIOClient, cmds: string[]): Promise<number> {
+/** parancsok sorrendtartoan, POST-onkent a vezerlo plafonjaig (client.bodyMax: Due 255 B, 4.x 1023 B) ero darabokban (a POST-ot sosem
+ *  ismeteljuk). prefix: MINDEN darab ele (pl. permissionsUser=<slot> - a jog-billentok a fw-ben globalisan kivalasztott userre hatnak,
+ *  igy egy kozben mas kliens altal atallitott kivalasztas sem viszi a darabot rossz userre). Visszaadja a POST-ok szamat. */
+export async function sendCmds(client: MyIOClient, cmds: string[], prefix?: string): Promise<number> {
+  const max = await client.bodyMax();
+  const body = (xs: string[]) => (prefix ? [prefix, ...xs] : xs).join('&');
   let chunk: string[] = [], n = 0;
-  const flush = async () => { if (chunk.length) { await client.command(chunk.join('&')); n++; chunk = []; } };
+  const flush = async () => { if (chunk.length) { await client.command(body(chunk)); n++; chunk = []; } };
   for (const c of cmds) {
-    if (Buffer.byteLength(c) > POST_BODY_MAX) throw new MyIOError(`command ${c.slice(0, 40)}... is longer than ${POST_BODY_MAX} B`);
-    if (Buffer.byteLength([...chunk, c].join('&')) > POST_BODY_MAX) await flush();
+    if (Buffer.byteLength(body([c])) > max) throw new MyIOError(`command ${c.slice(0, 40)}... is longer than ${max} B (the limit of ${client.name})`);
+    if (Buffer.byteLength(body([...chunk, c])) > max) await flush();
     chunk.push(c);
   }
   await flush();

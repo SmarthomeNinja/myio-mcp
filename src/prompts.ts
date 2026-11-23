@@ -16,10 +16,10 @@ import {
   Device, FEAT, baseId, decodeGlobals, decodeInputConfigs, decodeOutputConfigs, decodeSensors, decodeStructures, fmtDevice, fmtInputConfig, fmtOutputConfig,
   fmtSensor, fmtThermostat, fmtTimer, fmtUsens, nameMaps, normalizeName, num, parseTimerCsv, supports, targetText, vnum,
 } from './model.js';
-import { flowText, decodeFlowLive, flowTraceText, progText, FlowDef, FlowCard } from './model_auto.js';
+import { flowText, decodeFlowLive, flowTraceText, traceNewest, progText, FlowDef, FlowCard } from './model_auto.js';
 import { fmtSysdiag, logLineLevel, yymmdd, RESET_CAUSE } from './model_diag.js';
 import { flowReference } from './docs.js';
-import { ToolContext, devices, usensOrEmpty, thermostatsOf } from './tools/common.js';
+import { ToolContext, devices, usensOrEmpty, thermostatsOf, logUrl } from './tools/common.js';
 import { readFlows, flowTrace, flowNamer, flowLimits, readProg } from './tools/auto.js';
 import { miaText, sgText } from './tools/integr.js';
 import { expText } from './tools/bus.js';
@@ -37,11 +37,11 @@ async function section(title: string, fn: () => Promise<string | undefined>): Pr
 }
 const joinSections = (parts: string[]) => parts.filter(Boolean).join('\n\n');
 
-/** napi esemenynaplo sorai (a fw sajat keresesi sorrendjevel: belso flash, majd SD) */
+/** napi esemenynaplo sorai (4.x: a fw sajat keresesi sorrendjevel, belso flash, majd SD; Due: SD, lasd logUrl) */
 async function logLines(c: MyIOClient, date?: string): Promise<{ day: string; lines: string[] }> {
   await c.require(FEAT.files, 'log files');
   const day = yymmdd(date, new Date());
-  const body = await c.getText(`ev_log/e_${day}.csv`, { timeoutMs: 90_000 });
+  const body = await c.getText(await logUrl(c, `/ev_log/e_${day}.csv`), { timeoutMs: 90_000 });
   return { day, lines: body.split(/\r?\n/).filter(l => l.trim()) };
 }
 /** a sor "forras,esemeny" kulcsa a szint es az idobelyeg utan (osszesiteshez) */
@@ -218,8 +218,8 @@ export function registerPrompts(server: McpServer, ctx: ToolContext): void {
         if (!fl.length) return 'none';
         const tr = await flowTrace(c).catch(() => undefined); const live = decodeFlowLive(tr?.flows); const { namer } = await flowNamer(c, file);
         const names = new Map(fl.map(f => [f.id, f.name ?? '']));
-        const rows = (tr?.trace ?? []).filter(r => names.has(Number(r[1]))).slice(0, 12);
-        return fl.map(f => flowText(f, namer, live.get(f.id))).join('\n') + (rows.length ? '\nrecent trace:\n' + rows.map(r => '  ' + flowTraceText(r, num(tr?.up), names)).join('\n') : '');
+        const rows = traceNewest((tr?.trace ?? []).filter(r => names.has(Number(r[1]))), 12);
+        return fl.map(f => flowText(f, namer, live.get(f.id))).join('\n') + (rows.length ? '\nrecent trace (newest first):\n' + rows.map(r => '  ' + flowTraceText(r, names)).join('\n') : '');
       }) : '',
       supports(v, FEAT.script) ? await section('Scripts that use it', async () => {
         const p = await readProg(c);

@@ -1,6 +1,6 @@
 {
   "name": "myio-mcp",
-  "version": "1.6.2",
+  "version": "1.7.0",
   "mcpName": "io.github.SmarthomeNinja/myio-mcp",
   "description": "MCP server for the myIO smart home controller: Claude and other AI assistants read and control heating, lighting, blinds and energy over the local network",
   "keywords": [
@@ -38,7 +38,8 @@
   },
   "files": [
     "dist",
-    "API_REFERENCE.md"
+    "API_REFERENCE.md",
+    "modbus_templates.json"
   ],
   "engines": {
     "node": ">=18"
@@ -50,8 +51,9 @@
     "watch": "tsc --watch",
     "test": "npm run build && node --test test/*.test.mjs",
     "smoke": "node test/smoke.mjs",
-    "pack": "npm run sync-docs && npm run build && mcpb pack . myio-mcp.mcpb",
+    "pack": "npm run sync-docs && npm run sync-modbus && npm run build && mcpb pack . myio-mcp.mcpb",
     "sync-docs": "node scripts/sync-docs.mjs",
+    "sync-modbus": "node scripts/sync-modbus.mjs",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

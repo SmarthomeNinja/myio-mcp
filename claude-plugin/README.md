@@ -29,7 +29,7 @@ The documentation is mostly in Hungarian; Claude searches it in Hungarian and an
 
 The documentation and the skills work straight away. To let Claude look at your own controller, connect **myIO Smart Home**: in Claude chat and Cowork on the plugin's **Connectors** tab, in Claude Code with `/mcp`. The myIO authorization page opens.
 
-1. **Pair it with your controller.** On the controller's service display open the Cloud page, or open the myIO Cloud page in its web interface, and ask for a new code. Type the six-character code into the authorization page; the code lives for 5 minutes. Claude then works with the permissions of the controller's own "AI (Claude)" user. To use another myIO user's permissions instead, start pairing for that user on the myIO Cloud page (the admin cannot be chosen) and paste the pairing link it shows in place of the code.
+1. **Pair it with your controller.** On the controller's service display open the Cloud page, or open the myIO Cloud page in its web interface, and ask for a new code. Type the six-character code into the authorization page; the code lives for 5 minutes. Claude then works with the permissions of the controller's own "AI" user. To use another myIO user's permissions instead, start pairing for that user on the myIO Cloud page (the admin cannot be chosen) and paste the pairing link it shows in place of the code.
 2. **Choose what Claude may do.** Read only, switch (outputs, blinds, thermostat targets), or change settings too.
 
 What you need: a myIO V4 controller (GIGA or Opta) with a myIO Cloud subscription and firmware 4.26 or newer. There is no separate account and no password to enter.

@@ -10,9 +10,9 @@ import type { MyIOClient } from '../api.js';
 import { MyIOError } from '../api.js';
 import {
   decodeGlobals, fmtGlobals, decodeOutputConfigs, fmtOutputConfig, decodeInputConfigs, fmtInputConfig, decodeStructures, decodeScenes, decodeUsers,
-  parseTimerCsv, fmtTimer, timerCommand, daysMask, nameMaps, targetText, baseId, deviceTypeOf, TIMER_ANY, TIMER_EVENTS, Timer, varr, vnum, vdesc, FEAT, supports,
+  parseTimerCsv, fmtTimer, timerCommand, daysMask, nameMaps, targetText, baseId, deviceTypeOf, TIMER_ANY, TIMER_EVENTS, Timer, VarBlock, varr, vnum, vdesc, FEAT, supports,
 } from '../model.js';
-import { ToolContext, RO, WR_CFG, WR_CFG_SET, WR_ADM, text, fail, idArg, serverArg, sleep, SETTLE_MS, gate } from './common.js';
+import { ToolContext, RO, WR_CFG, WR_CFG_SET, WR_ADM, text, fail, idArg, serverArg, sleep, SETTLE_MS, gate, sendCmds } from './common.js';
 
 export function registerConfigTools(server: McpServer, ctx: ToolContext): void {
   const { reg } = ctx;
@@ -432,26 +432,32 @@ export function registerConfigTools(server: McpServer, ctx: ToolContext): void {
     return text(`Sent: ${cmd.replace(/pwd\*\d+=[^&]*/g, m => m.replace(/=.*/, '=<base64 hidden>'))}\n` + after.map(u => `  slot ${u.slot}: ${u.name || '(no name)'} - ${u.rights}`).join('\n'));
   });
 
+  // jog-terkep: 4.x reqUserpermissions.js, Due 3.x a /userpermissions oldal (client.permissionVars)
+  const PERM_KEYS: Record<string, [string, string, string]> = {   // tool-kulcs -> [fw-billento parancs, var-blokk tomb, felirat]
+    relay_read: ['rReadPermission', 'relayReadPermission', 'relay read'], relay_write: ['rWritePermission', 'relayWritePermission', 'relay write'],
+    fet_read: ['fReadPermission', 'fetReadPermission', 'FET read'], fet_write: ['fWritePermission', 'fetWritePermission', 'FET write'],
+    pca_read: ['pReadPermission', 'pcaReadPermission', 'PCA read'], pca_write: ['pWritePermission', 'pcaWritePermission', 'PCA write'],
+    input_hit: ['swHitPermission', 'switchHitPermission', 'input hit'], input_press: ['swPressPermission', 'switchPressPermission', 'input press'] };
+  const permOn = (vb: VarBlock, k: string, i: number): boolean => varr(vb, PERM_KEYS[k][1])[i - 1] === 1;
+  const permLines = (vb: VarBlock): string[] => Object.values(PERM_KEYS).filter(([, vn]) => vb.has(vn)).map(([, vn, label]) => {
+    const all = varr(vb, vn), l = all.map((v, i) => (v === 1 ? i + 1 : 0)).filter(Boolean);
+    return `  ${label}: ${l.length ? (l.length === all.length ? 'ALL' : l.join(', ')) : 'none'}`;
+  });
+
   server.registerTool('myio_permissions', {
     title: 'User element permissions',
-    description: 'Element permissions of a user slot (4.x): read / write per relay (and FET), hit / press per input - the lists of element ids the user may see / switch. On Due 3.x the map cannot be read (only set with fill/clear and explicit toggles). Admin level reads it too.',
+    description: 'Element permissions of a user slot: read / write per relay, FET and PCA output, hit / press per input - the lists of element indexes the user may see / switch (PCA 1 = output 2001, FET 1 = output 101). Works on 4.x and on Due 3.x. Admin level reads it too.',
     inputSchema: { slot: z.number().int().min(0), server: S },
     annotations: RO,
   }, async ({ slot, server: sv }) => {
     const client = reg.pick(sv);
-    if (!supports(await client.version(), FEAT.usens)) return fail(`permission maps are not readable on firmware ${await client.version()} (Due); use myio_set_permissions with fill / clear`);
     const vb = await client.permissionVars(slot);
-    const ids = (name: string) => varr(vb, name).map((v, i) => (v === 1 ? i + 1 : 0)).filter(Boolean);
-    const lines = [`${client.name} user slot ${slot} (${vdesc(vb, 'userName').get(slot) ?? ''}):`];
-    for (const [label, key] of [['relay read', 'relayReadPermission'], ['relay write', 'relayWritePermission'], ['FET read', 'fetReadPermission'], ['FET write', 'fetWritePermission'], ['PCA read', 'pcaReadPermission'], ['PCA write', 'pcaWritePermission'], ['input hit', 'switchHitPermission'], ['input press', 'switchPressPermission']] as const)
-      if (vb.has(key)) { const l = ids(key); lines.push(`  ${label}: ${l.length ? (l.length === varr(vb, key).length ? 'ALL' : l.join(', ')) : 'none'}`); }
-    void vnum;
-    return text(lines.join('\n'));
+    return text([`${client.name} user slot ${slot} (${vdesc(vb, 'userName').get(slot) ?? ''}):`, ...permLines(vb)].join('\n'));
   });
 
   server.registerTool('myio_set_permissions', {
     title: 'Change user element permissions',
-    description: 'Change the element permissions of a user slot (ADMIN). fill = grant everything, clear = revoke everything. Then per list the ids to GRANT or REVOKE: relay_read, relay_write, pca_read, pca_write, fet_read, fet_write (output ids), input_hit, input_press (input ids). On 4.x the current map is read first and only differences are sent; on Due 3.x the firmware toggles are sent as given (each id flips its bit).',
+    description: 'Change the element permissions of a user slot (ADMIN). fill = grant everything, clear = revoke everything (run first). Then per list the ids to GRANT or REVOKE: relay_read, relay_write, pca_read, pca_write, fet_read, fet_write (output ids), input_hit, input_press (input ids). The firmware commands FLIP a bit, so the current map is read first (4.x and Due 3.x) and only the differences are sent - repeating the same call is safe. Long lists are split into several requests (Due 3.x: 255 bytes each). The map is read back and checked.',
     inputSchema: {
       slot: z.number().int().min(0), fill: z.boolean().optional(), clear: z.boolean().optional(),
       grant: z.object({ relay_read: z.array(z.number().int()).optional(), relay_write: z.array(z.number().int()).optional(), pca_read: z.array(z.number().int()).optional(), pca_write: z.array(z.number().int()).optional(), fet_read: z.array(z.number().int()).optional(), fet_write: z.array(z.number().int()).optional(), input_hit: z.array(z.number().int()).optional(), input_press: z.array(z.number().int()).optional() }).optional(),
@@ -462,34 +468,40 @@ export function registerConfigTools(server: McpServer, ctx: ToolContext): void {
   }, async ({ slot, fill, clear, grant, revoke, server: sv }) => {
     const g = gate(ctx, 'admin'); if (g) return g;
     const client = reg.pick(sv);
-    const v4 = supports(await client.version(), FEAT.usens);
-    const cmds: string[] = [];
-    if (fill) cmds.push(`fillPermission=${slot}`);
-    if (clear) cmds.push(`clearPermission=${slot}`);
-    const keyOf: Record<string, [string, string]> = { relay_read: ['rReadPermission', 'relayReadPermission'], relay_write: ['rWritePermission', 'relayWritePermission'], pca_read: ['pReadPermission', 'pcaReadPermission'], pca_write: ['pWritePermission', 'pcaWritePermission'],
-      fet_read: ['fReadPermission', 'fetReadPermission'], fet_write: ['fWritePermission', 'fetWritePermission'], input_hit: ['swHitPermission', 'switchHitPermission'], input_press: ['swPressPermission', 'switchPressPermission'] };
-    let cur: Map<string, number[]> | undefined;
-    if (v4 && (grant || revoke)) {
-      if (cmds.length) { await client.command(cmds.join('&')); cmds.length = 0; }
-      const vb = await client.permissionVars(slot);
-      cur = new Map(Object.entries(keyOf).map(([k, [, vn]]) => [k, varr(vb, vn).map(x => (x === 1 ? 1 : 0))]));
-    }
-    const toggles: string[] = [`permissionsUser=${slot}`];
-    const want = (list: Record<string, number[] | undefined> | undefined, on: boolean) => {
-      for (const [k, ids] of Object.entries(list ?? {})) for (const id of ids ?? []) {
-        const idx = k.startsWith('pca') ? (id > 2000 ? id - 2000 : id) : k.startsWith('fet') ? (id > 100 ? id - 100 : id) : id;
-        const has = cur ? (cur.get(k)?.[idx - 1] ?? 0) === 1 : undefined;
-        if (has === undefined || has !== on) toggles.push(`${keyOf[k][0]}=${idx}`);
+    // [tool-kulcs, 1-alapu index] parok, ismetles nelkul (egy ismetelt id kulonben ketszer billenne = nem valtozna)
+    const idx = (k: string, id: number) => (k.startsWith('pca') ? (id > 2000 ? id - 2000 : id) : k.startsWith('fet') ? (id > 100 ? id - 100 : id) : id);
+    const pairs = (list: Record<string, number[] | undefined> | undefined): [string, number][] =>
+      Object.entries(list ?? {}).flatMap(([k, ids]) => [...new Set((ids ?? []).map(id => idx(k, id)))].map(i => [k, i] as [string, number]));
+    const wantOn = pairs(grant), wantOff = pairs(revoke);
+    const both = wantOn.filter(([k, i]) => wantOff.some(([k2, i2]) => k2 === k && i2 === i));
+    if (both.length) return fail(`in both grant and revoke: ${both.map(([k, i]) => `${k} ${i}`).join(', ')}`);
+    const pre = [fill ? `fillPermission=${slot}` : '', clear ? `clearPermission=${slot}` : ''].filter(Boolean);
+    if (!pre.length && !wantOn.length && !wantOff.length) return text('Nothing to change.');
+    if (pre.length) await client.command(pre.join('&'));
+    let cur: VarBlock | undefined;
+    if (wantOn.length || wantOff.length) {
+      try { cur = await client.permissionVars(slot); }
+      catch (e) {
+        if (!(e instanceof MyIOError) || !/not available/.test(e.message)) throw e;
+        // terkep nelkul csak a fill/clear utani ismert allapotra szabad billenteni
+        if (!fill && !clear) return fail(`${e.message}. Each permission command FLIPS its bit, so without the current map an id already in the wanted state would be flipped the wrong way: grant only together with clear, revoke only together with fill.`);
       }
-    };
-    want(grant, true); want(revoke, false);
-    if (toggles.length > 1) cmds.push(...toggles);
-    if (!cmds.length) return text('Nothing to change.');
-    await client.command(cmds.join('&'));
+      if (cur) {
+        const bad = [...wantOn, ...wantOff].filter(([k, i]) => i < 1 || i > varr(cur!, PERM_KEYS[k][1]).length);
+        if (bad.length) return fail(`not on this controller: ${bad.map(([k, i]) => `${k} ${i}`).join(', ')} (${client.name} has ${Object.entries(PERM_KEYS).map(([k, [, vn]]) => `${k} 1..${varr(cur!, vn).length}`).join(', ')})${pre.length ? ` - ${pre.join('&')} was already sent` : ''}`);
+      }
+    }
+    const isOn = (k: string, i: number) => (cur ? permOn(cur, k, i) : !clear && !!fill);   // fill, majd clear: a clear nyer
+    const toggles = [...wantOn.filter(([k, i]) => !isOn(k, i)), ...wantOff.filter(([k, i]) => isOn(k, i))].map(([k, i]) => `${PERM_KEYS[k][0]}=${i}`);
+    if (!pre.length && !toggles.length) return text(['Nothing to change - already in the wanted state.', ...(cur ? permLines(cur) : [])].join('\n'));
+    // minden darab elejen permissionsUser=<slot>: a billento a fw-ben kivalasztott userre hat
+    const posts = toggles.length ? await sendCmds(client, toggles, `permissionsUser=${slot}`) : 0;
     await sleep(SETTLE_MS);
-    if (!v4) return text(`Sent: ${cmds.join('&')}\n  (Due 3.x: toggles applied as given; the map cannot be read back)`);
-    const vb = await client.permissionVars(slot);
-    const ids = (name: string) => varr(vb, name).map((v, i) => (v === 1 ? i + 1 : 0)).filter(Boolean);
-    return text(`Sent: ${cmds.join('&')}\n` + Object.entries(keyOf).filter(([, [, vn]]) => vb.has(vn)).map(([k, [, vn]]) => { const l = ids(vn); return `  ${k}: ${l.length ? (l.length === varr(vb, vn).length ? 'ALL' : l.join(', ')) : 'none'}`; }).join('\n'));
+    const head = `Sent: ${[...pre, toggles.length ? `${toggles.length} toggle(s) in ${posts} request(s) (at most ${await client.bodyMax()} B each)` : ''].filter(Boolean).join(' + ') || 'nothing - already in the wanted state'}`;
+    let after: VarBlock;
+    try { after = await client.permissionVars(slot); }
+    catch (e) { return text(`${head}\n  read-back failed: ${e instanceof Error ? e.message : String(e)} - check with myio_permissions`); }
+    const wrong = [...wantOn.filter(([k, i]) => !permOn(after, k, i)), ...wantOff.filter(([k, i]) => permOn(after, k, i))];
+    return text([head, ...permLines(after), ...(wrong.length ? [`WARNING - not in the wanted state after the write: ${wrong.map(([k, i]) => `${k} ${i}`).join(', ')}`] : [])].join('\n'));
   });
 }

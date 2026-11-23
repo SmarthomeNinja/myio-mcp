@@ -53,7 +53,16 @@ More: [Talk to your home](https://myio.hu/en/blog/talk-to-your-home) ·
 > **Privacy:** the MCP server runs locally, but the AI assistant runs on its provider's servers. Your
 > questions, and what it reads to answer them (e.g. temperatures, output names), reach the provider.
 
-## Status (1.6.2, 2026-11-15)
+## Status (1.7.0, 2026-11-23)
+
+1.7.0: long command lists follow the controller's own limit - a request body holds at most 255 bytes on a Due 3.x and 1023 bytes on
+4.x, and a longer chain goes out in several requests, split at the `&` boundaries, in order (a Due up to 3.12.45 silently cut a
+longer body after 255 bytes and ran the cut part; Due 3.12.46 and 4.30.4 answer 413 and run none of it). `myio_permissions` and
+`myio_set_permissions` read the permission map on a Due too, so only the differences are sent (each firmware command flips a bit),
+the map is read back and checked, and repeating a call is safe. New setup helpers: `myio_wait_input`, `myio_wait_sensor`,
+`myio_sensor_rescan`. Optional Modbus bus discovery and template collection (`MYIO_MODBUS_DISCOVERY=1`). On a Due an editor / admin
+account reads the daily logs over the `~sd/` path, so a missing day no longer looks like an unreachable controller.
+`myio_flow_trace` shows the age of every entry.
 
 1.6.2: works better from outside the home network (port forwarding, DDNS) - when the controller answers a remote read with
 503 and Retry-After (it serves heavy requests from other networks at most every few seconds), the server waits and tries again, at
@@ -87,9 +96,9 @@ layer: **resources**, **prompts**, **toolsets**, consistent **annotations** and 
 - write level (`MYIO_WRITE` = read | state | config | admin) limits what the AI may change
 - MCP layer: resources (`myio://<controller>/state` ...), four prompts in Hungarian and English that read the controller first, toolsets
   (`MYIO_TOOLSETS`) to save context, annotations that follow one rule set, Streamable HTTP for other LAN clients (bearer token)
-- zod input schemas, mock controller + end-to-end tests (`npm test`, 72 tests), restoring live tests for a bench controller
+- zod input schemas, mock controller + end-to-end tests (`npm test`, 106 tests), restoring live tests for a bench controller
 
-## Tools (102)
+## Tools (105)
 
 | Tool | Toolset | What it does |
 |---|---|---|
@@ -106,6 +115,9 @@ layer: **resources**, **prompts**, **toolsets**, consistent **annotations** and 
 | `myio_group_on` / `_off` / `_toggle` | legacy | group 501.. (editor level needed on the controller) |
 | `myio_inputs` | house | wall buttons / switches: state, name, enabled, NC (4.3.12+ / Due 3.12.7+) |
 | `myio_press_button` | house | simulate a button: hit (short), press (long), release - runs the input's bound actions |
+| `myio_wait_input` | house | setup helper: waits for a physical button press and reports which input it was, the kind of press and its binding (events on 4.27+; older firmware: hold the button 2-3 s) |
+| `myio_wait_sensor` | house | setup helper: finds the 1-Wire thermometer someone is warming (rise of 1.0 °C by default); an unfinished wait is continued by the next call |
+| `myio_sensor_rescan` | house | search the 1-Wire buses again after wiring a new thermometer; marks new and missing sensors (4.27+, editor level) |
 | `myio_thermostats` / `myio_set_thermostat` | house | sensor-controlled zones: target + band (hysteresis), heat/cool, current temperature; set target, band, raw thresholds, bind sensor |
 | `myio_shutters` / `myio_shutter` | house | UP/DOWN pairs (protection pairs): opening / closing / stopped; open, close, stop |
 | `myio_rgb` / `myio_set_rgb` | house | RGB groups ("RGB..." group with R/G/B channels): on/off, colour, brightness |
@@ -124,7 +136,7 @@ layer: **resources**, **prompts**, **toolsets**, consistent **annotations** and 
 | `myio_flows` | automation | Flow rules (4.4+): WHEN / AND / THEN in plain words with names, live state (enabled, running, last fired), variables, webhooks; `raw` = flows.jsn |
 | `myio_flow_save` | automation | add / replace / delete a rule, a variable or a webhook target, or replace the whole flows.jsn - validated first, then uploaded + reloaded + read back (`dry_run`) |
 | `myio_flow` | automation | runtime: enable / disable a rule, fire its actions now, set a global variable |
-| `myio_flow_trace` / `myio_webhook_test` | automation | what the engine did (incremental with `since`); fire a webhook slot and report the HTTP result |
+| `myio_flow_trace` / `myio_webhook_test` | automation | what the engine did, newest first, every entry with its age (`[12 s ago]`, `[1 h 35 min ago]`; incremental with `since`); fire a webhook slot and report the HTTP result |
 | `myio_scripts` / `myio_script_get` | automation | myIO Script programs (4.10+): state, errors with line:col, timing, locals, arrays, global variables, trace; source of a slot |
 | `myio_script_save` / `myio_script` | automation | write + compile a program (compile error with the source line); reload, run once, enable / disable (RAM or persistent), delete |
 | `myio_reference` | automation | the bundled firmware documentation: complete script language, Flow card format, any API section |
@@ -159,7 +171,7 @@ actions is annotated for its most dangerous one. `myio_webhook_test` is `openWor
 
 ## Toolsets
 
-The 102 tool descriptions cost context. `MYIO_TOOLSETS` loads only some groups (the same field is in the Claude Desktop settings):
+The 105 tool descriptions cost context. `MYIO_TOOLSETS` loads only some groups (the same field is in the Claude Desktop settings):
 
 | Toolset | Tools |
 |---|---|
@@ -241,6 +253,7 @@ Environment variables (the Claude Desktop extension asks for them as *user confi
 | `MYIO_HTTP_PORT` / `MYIO_HTTP_HOST` / `MYIO_HTTP_TOKEN` / `MYIO_STDIO` | optional Streamable HTTP transport (see above) |
 | `MYIO_TIMEOUT_MS` | HTTP timeout, default 10000 |
 | `MYIO_MIN_GAP_MS` | minimum pause between two requests to one controller, default 150 (a Due refuses request bursts) |
+| `MYIO_MODBUS_DISCOVERY` | `1` = also offer the Modbus bus discovery and the template collection (`myio_modbus_discover`, `myio_modbus_templates`; 4.x with an RS485 expander) |
 | `MYIO_INSECURE_PARSER` | `0` = strict Node HTTP parser (default lenient: the firmware writes its headers by hand) |
 
 ### Claude Desktop
@@ -293,7 +306,8 @@ Layout: `src/api.ts` (HTTP client + command dispatch), `src/model.ts` (JSON → 
 ## Rules the server follows (from the API reference, chapter 12)
 
 1. One request at a time, `Connection: close`, no polling faster than 1 s - the controller has 3 listen sockets.
-2. Commands go as `POST /info.json` body (the `GET /command:` path does not URL-decode), max 1024 bytes.
+2. Commands go as `POST /info.json` body (the `GET /command:` path does not URL-decode), at most 1023 bytes per request on 4.x and
+   255 bytes on a Due 3.x - longer chains are split at the `&` boundaries.
 3. The command reply is an HTML/JSON acknowledgement, not the new state: read `sens_out.json` back.
 4. JSON keys may be missing (permission filtering): never rely on a fixed key set.
 5. Toggle-type config commands (`relaysInvert=<id>` ...) invert a flag - read first, send only on change.

@@ -342,6 +342,15 @@ export function registerBusTools(server: McpServer, ctx: ToolContext): void {
       if (panel && num(p.a) !== panel) continue;
       const cfg = (p.cfg as number[]) ?? [];
       L.push(`  panel #${p.a} "${p.name ?? ''}" ${num(p.on) ? 'ONLINE' : 'offline'}${num(p.ld) ? '' : ' (tables not loaded)'}${p.preset ? `, preset ${p.preset}` : ''}${num(p.pend) ? `, ${p.pend} writes pending` : ''}; bus ${BAUD[cfg[0]] ?? cfg[0]} ${FRAME[cfg[1]] ?? cfg[1]}, timeout ${num(cfg[2]) * 10} ms, retries ${cfg[3]}, gap ${cfg[4]} ms`);
+      // [fw 4.30] eszkoz-figyelo: ds = [cim, 0 ismeretlen / 1 online / 2 kiesett, kor s (-1 = meg nem), LOST/BACK ideje (vezerlo-helyi unix), LOST-ido s]
+      const ds = p.ds as number[][] | undefined, devn = new Map(((p.dev as J[]) ?? []).map(d => [num(d.a), String(d.n ?? '')]));
+      if (ds) for (const r of ds) {
+        const nm = devn.get(r[0]) ? ` "${devn.get(r[0])}"` : '';
+        const st = r[1] === 2 ? 'LOST - not answering' : r[1] === 1 ? 'online' : 'state unknown (no answer since the watch started)';
+        L.push(`    device ${r[0]}${nm}: ${st}; last answer ${r[2] >= 0 ? `${r[2]} s ago` : 'never'}; lost after ${r[4]} s without an answer (Flow card mbdev, Script mbdev(${num(p.a)}, ${r[0]}))`);
+      }
+      const rst = p.rst as number[] | undefined;
+      if (rst && rst[0] > 0 && (rst[0] & 1)) L.push(`    note: the panel restarted by its watchdog (${rst[1]}x since power-on)`);
       ((p.blk as number[][]) ?? []).forEach((b, i) => { if (b[0]) L.push(`    block ${i}: slave ${b[0]} func ${b[1]} start ${u16(b[2], b[3])} count ${b[4]} every ${b[5]} s${b[6] & 1 ? '' : ' (DISABLED)'}`); });
       const fn = (p.fn as string[]) ?? [], val = (p.val as unknown[][]) ?? [];
       ((p.fld as number[][]) ?? []).forEach((f, i) => {

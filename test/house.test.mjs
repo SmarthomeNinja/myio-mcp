@@ -33,7 +33,7 @@ test('tool roster: 19 round-0 + 13 house + 21 config tools', async () => {
   const { tools } = await client.listTools();
   const names = new Set(tools.map(t => t.name));
   for (const n of ['myio_servers', 'myio_find', 'myio_output', 'myio_inputs', 'myio_press_button', 'myio_thermostats', 'myio_set_thermostat', 'myio_shutters', 'myio_shutter', 'myio_rgb', 'myio_set_rgb', 'myio_usensors', 'myio_set_usens', 'myio_info', 'myio_relay_on', 'myio_send_command']) assert.ok(names.has(n), n);
-  assert.equal(tools.length, 102);
+  assert.equal(tools.length, 105);
   const srv = tools.find(t => t.name === 'myio_relay_on').inputSchema.properties.server;
   assert.match(srv.description, /Földszint \| Emelet/);
 });

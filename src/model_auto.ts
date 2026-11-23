@@ -14,15 +14,18 @@ export interface FlowsFile { formatVersion: number; vars?: FlowVar[]; flows: Flo
 
 export const FLOW_LIMITS = { flows: 64, and: 8, then: 16, vars: 32, hooks: 8, str: 223 };
 export const FLOW_CARDS = {
-  when: ['sens', 'scmp', 'out', 'time', 'sun', 'var', 'boot'],
-  and: ['sens', 'scmp', 'out', 'twin', 'var'],
-  then: ['rel', 'grp', 'pca', 'fet', 'delay', 'var', 'log', 'msg', 'http'],
+  when: ['sens', 'scmp', 'out', 'time', 'sun', 'var', 'boot', 'mbdev'],
+  and: ['sens', 'scmp', 'out', 'twin', 'var', 'psim', 'mbdev'],
+  then: ['rel', 'grp', 'pca', 'fet', 'delay', 'var', 'log', 'msg', 'http', 'psim'],
 } as const;
+export const PSIM_MAX = 4;          // fw psim_core.h: jelenlet-szimulacio profilok (sims[].id 1..4) [4.24]
+export const MBDEV_PANEL_MAX = 16;  // fw: a panel-cim 1..MYIO_EXPANDER_COUNT (a pontos szamot a vezerlo ellenorzi) [4.30]
 type Ctx = keyof typeof FLOW_CARDS;
 const CARD_KEYS: Record<string, string[]> = {
   sens: ['src', 'ch', 'id', 'op', 'val', 'hyst'], scmp: ['src', 'ch', 'id', 'op', 'src2', 'ch2', 'id2', 'dv', 'hyst'],
   out: ['id', 'dir', 'on'], time: ['min', 'days'], sun: ['ev', 'off', 'days'], var: ['id', 'op', 'val'], boot: [], twin: ['from', 'to', 'days'],
   rel: ['id', 'act'], grp: ['id', 'act'], pca: ['id', 'val'], fet: ['id', 'val'], delay: ['s', 'm'], log: ['val'], msg: [], http: ['id', 'val'],
+  psim: ['id', 'act', 'on'], mbdev: ['p', 'a', 'ev', 'on'],
 };
 
 export interface FlowLimits { rq: number; pcaq: number; senq: number; fet?: boolean; outputs?: Set<number>; }
@@ -180,12 +183,28 @@ export function validateFlows(f: unknown, lim: FlowLimits): Issue[] {
       }
       case 'delay': { const s = num('s') ?? 0, m = num('m') ?? 0; if (s < 0 || m < 0 || (!s && !m)) err(w, 'delay needs s (seconds) and/or m (minutes) > 0'); break; }
       case 'http': { const id = num('id'); if (id === undefined || id < 1 || id > FLOW_LIMITS.hooks) err(w, `id must be the webhook slot 1..${FLOW_LIMITS.hooks}`); else if (!hookIds.has(id)) warn(w, `webhook slot ${id} is not defined in hooks[]`); break; }
+      case 'psim': {                                   // jelenlet-szimulacio [4.24]: THEN act 1 indit / 0 leallit / 2 valt, AND on 0|1
+        const id = num('id'); if (id === undefined || !Number.isInteger(id) || id < 1 || id > PSIM_MAX) err(w, `id must be the presence-simulation profile 1..${PSIM_MAX}`);
+        if (ctx === 'then' && ![0, 1, 2].includes(c.act as number)) err(w, 'act must be 0 (stop), 1 (start) or 2 (toggle)');
+        if (ctx === 'and' && c.on !== 0 && c.on !== 1) err(w, 'on must be 0 (not running) or 1 (running)');
+        break;
+      }
+      case 'mbdev': {                                  // Modbus-eszkoz kieses [4.30]: p = panel-cim, a = slave-cim (0 = barmelyik / mind)
+        const p = num('p'); if (p === undefined || !Number.isInteger(p) || p < 1 || p > MBDEV_PANEL_MAX) err(w, 'p must be the Ext-RS485 panel address (1..)');
+        const a = num('a') ?? 0; if (!Number.isInteger(a) || a < 0 || a > 247) err(w, 'a must be the Modbus slave address 1..247 (0 = any device of the panel)');
+        if (ctx === 'when' && c.ev !== 'lost' && c.ev !== 'back') err(w, 'ev must be lost | back');
+        if (ctx === 'and'){
+          if (c.ev !== undefined) err(w, 'ev is a WHEN key - the controller disables a flow with ev on an AND card');
+          if (c.on !== 0 && c.on !== 1) err(w, 'on must be 1 (answers; with a=0: ALL devices of the panel) or 0 (lost; with a=0: ANY device)');
+        }
+        break;
+      }
     }
   }
 }
 
 // ---- Flow: emberi leiras --------------------------------------------------------------------------------------------------
-export interface FlowNamer { out(id: number): string; thermo(ch: number): string; hum(ch: number): string; usens(id: number): string; variable(id: number): string; hook(id: number): string; }
+export interface FlowNamer { out(id: number): string; thermo(ch: number): string; hum(ch: number): string; usens(id: number): string; variable(id: number): string; hook(id: number): string; mbdev?(p: number, a: number): string; }
 const OPS: Record<string, string> = { gt: '>', lt: '<', eq: '=', ne: '≠' };
 export const hhmm = (min: number): string => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
 const FLOW_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -226,6 +245,16 @@ export function cardText(c: FlowCard, ctx: Ctx, n: FlowNamer): string {
     case 'log': return `event-log entry (value ${c.val ?? 0})`;
     case 'msg': return 'web-UI notification (M59)';
     case 'http': return `webhook ${n.hook(Number(c.id))}${c.val !== undefined ? ` ($val=${c.val})` : ''}`;
+    case 'psim':
+      if (ctx === 'and') return `presence simulation #${c.id} is ${c.on ? 'running' : 'NOT running'}`;
+      return `presence simulation #${c.id} ${c.act === 1 ? 'START' : c.act === 0 ? 'STOP' : 'TOGGLE'}`;
+    case 'mbdev': {
+      const a = Number(c.a ?? 0), p = Number(c.p);
+      const dev = a ? (n.mbdev ? n.mbdev(p, a) : `Modbus device ${a} on panel ${p}`) : `any Modbus device on panel ${p}`;
+      if (ctx === 'when') return `${dev} ${c.ev === 'back' ? 'answers again' : 'stops answering (lost)'}`;
+      if (!a) return c.on ? `ALL Modbus devices on panel ${p} answer` : `a Modbus device on panel ${p} is lost`;
+      return `${dev} ${c.on ? 'answers (online)' : 'is lost'}`;
+    }
     default: return JSON.stringify(c);
   }
 }
@@ -264,16 +293,26 @@ export const FLOW_TRACE_EV: Record<number, string> = {
   10: 'webhook sent', 11: 'webhook error',
 };
 const WH_ERR: Record<number, string> = { [-1]: 'gap brake / empty slot', [-2]: 'queue full', [-3]: 'DNS failed', [-4]: 'connect failed', [-5]: 'timeout' };
+/** a trace-sor elso eleme: az esemeny KORA ms-ban (a fw `_now - e.ms`-t ad, NEM boot ota mert idot) -> "12 s ago", "54 min 48 s ago" */
+export function traceAgeText(ageMs: number): string {
+  if (!Number.isFinite(ageMs) || ageMs < 0) return '? ago';
+  const s = Math.round(ageMs / 1000);
+  if (s < 60) return `${s} s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)} min ${s % 60} s ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min ago`;
+  return `${Math.floor(s / 86400)} d ${Math.floor((s % 86400) / 3600)} h ago`;
+}
+/** a fw a trace-t IDORENDBEN adja (a legregebbi elol): az utolso `limit` sor, a legujabb elol */
+export const traceNewest = (trace: unknown[][] | undefined, limit: number): unknown[][] => (trace ?? []).slice(-limit).reverse();
 /** [koraMs, flowId, ev, kartyaIdx, ertek] -> szoveg */
-export function flowTraceText(row: unknown[], uptimeS: number, names: Map<number, string>): string {
+export function flowTraceText(row: unknown[], names: Map<number, string>): string {
   const [ms, id, ev, card, val] = row.map(Number);
-  const ago = Math.max(0, Math.round(uptimeS - ms / 1000));
   const who = `flow ${id}${names.get(id) ? ` "${names.get(id)}"` : ''}`;
   let what = FLOW_TRACE_EV[ev] ?? `ev ${ev}`;
   if (ev === 2 || ev === 3 || ev === 8) what += ` (card ${card + 1}, value ${val})`;
   if (ev === 10) what += ` (slot ${card}, HTTP ${val})`;
   if (ev === 11) what += ` (slot ${card}: ${val > 0 ? `HTTP ${val}` : WH_ERR[val] ?? val})`;
-  return `-${ago}s ${who}: ${what}`;
+  return `[${traceAgeText(ms)}] ${who}: ${what}`;
 }
 
 // ---- myIO Script: prog.json ----------------------------------------------------------------------------------------------
@@ -296,16 +335,16 @@ export function progText(p: ProgSlot, withLocals = true): string {
 // prog trace ev (ProgTraceEv, prog_defs.h; API-ref 10/G.11)
 const PROG_FN: Record<number, string> = { 40: 'on', 41: 'off', 42: 'toggle', 43: 'set', 48: 'msg', 49: 'hook' };
 const PROG_REJ: Record<number, string> = { 1: 'bad id', 2: 'thermostat-controlled output', 3: 'flood brake', 4: 'scene slot missing' };
-export function progTraceText(row: unknown[], uptimeS: number, names: Map<number, string>): string {
+/** [koraMs, progId, ev, a, ertek] -> szoveg */
+export function progTraceText(row: unknown[], names: Map<number, string>): string {
   const [ms, id, ev, a, val] = row.map(x => (x === null ? NaN : Number(x)));
-  const ago = Math.max(0, Math.round(uptimeS - ms / 1000));
   const who = `script ${id}${names.get(id) ? ` "${names.get(id)}"` : ''}`;
   const t: Record<number, string> = {
     1: `loaded (${val} instructions)`, 2: `compile error at line ${a}, col ${val}`, 3: `command ${PROG_FN[a] ?? a} -> ${val}`, 4: `log${a ? ` value ${val}` : ''}`,
     5: `runtime error R${String(a).padStart(2, '0')} at pc ${val}`, 6: `time cap exceeded (${val} µs)`, 7: `${val ? 'enabled' : a ? 'stopped by stop()' : 'disabled'}`,
     8: `manual run (${val} µs)`, 9: `scene slot ${val} loaded`, 10: `global var ${a} = ${val}`, 11: `command rejected (${PROG_REJ[a] ?? a}, id ${val})`,
   };
-  return `-${ago}s ${who}: ${t[ev] ?? `ev ${ev} a=${a} val=${val}`}`;
+  return `[${traceAgeText(ms)}] ${who}: ${t[ev] ?? `ev ${ev} a=${a} val=${val}`}`;
 }
 
 /** a #enabled direktiva atirasa - bajtra a webes szerkeszto pgSetDirective-je (js/prog.js): az elso #enabled sor csereje,

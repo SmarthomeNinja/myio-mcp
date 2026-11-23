@@ -53,7 +53,7 @@ test('lib: a custom transport carries every request (info, state, command)', asy
 test('lib: every tool carries its title in the annotations too (Connectors Directory)', async () => {
   const client = await connect(buildServer(reg, 'admin'));
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 102);
+  assert.equal(tools.length, 105);
   for (const t of tools) { assert.ok(t.title, t.name); assert.equal(t.annotations?.title, t.title, t.name); }
   await client.close();
 });

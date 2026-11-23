@@ -70,6 +70,12 @@ export interface SensorReading { id: number; kind: SensorKind; name: string; val
 
 export interface Input { id: number; name: string; on: boolean; enabled?: boolean; nc?: boolean; }
 
+/** inev.json [4.27]: bemenet-esemenyek gyuruje. seq = az utolso esemeny sorszama (bootkor 0-rol indul); e: H rovid nyomas,
+ *  P hosszu nyomas (nyomva tartva), R elengedes hosszu nyomas utan; age = ennyi ms-mal ezelott */
+export interface RawInputEvent { n: number; id: number; e: string; age: number; }
+export interface InevJson { inev?: { seq?: number; n?: number; ev?: RawInputEvent[] }; }
+export const INPUT_EVENT_KIND: Record<string, string> = { H: 'short press', P: 'long press (held)', R: 'released after a long press' };
+
 export const USENS_TYPES: Record<number, { name: string; unit: string }> = {
   0: { name: 'generic', unit: '' }, 1: { name: 'temperature', unit: '°C' }, 2: { name: 'humidity', unit: '%' }, 3: { name: 'wind speed', unit: 'm/s' },
   4: { name: 'dew point', unit: '°C' }, 5: { name: 'power', unit: 'W' }, 6: { name: 'energy', unit: 'kWh' }, 7: { name: 'illuminance', unit: 'lx' },
@@ -175,6 +181,11 @@ export const FEAT = {
   dali: { v4: '4.8.6' } as MinVersion,
   dmx: { v4: '4.9.0' } as MinVersion,
   modbus: { v4: '4.16.0' } as MinVersion,
+  // Modbus busz-felderites [4.29, panel-fw 0.8+]: mb_disc / mb_dstop / mb_dprobe / mb_dcn + mbscan.json (MODBUS_PLAN.md 9.)
+  modbusDisc: { v4: '4.29.0' } as MinVersion,
+  // AI-beuzemeles [4.27]: bemenet-esemenyek gyuruje (inev.json) + 1-Wire ujrakereses futasidoben (ow_scan=1)
+  inputEvents: { v4: '4.27.0' } as MinVersion,
+  owScan: { v4: '4.27.0' } as MinVersion,
 };
 
 // ---- eszkozok ---------------------------------------------------------------------------------------------------------

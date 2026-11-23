@@ -16,9 +16,10 @@ import { registerAutomationTools } from './tools/auto.js';
 import { registerDiagTools } from './tools/diag.js';
 import { registerIntegrationTools } from './tools/integr.js';
 import { registerBusTools } from './tools/bus.js';
+import { registerModbusDiscTools } from './tools/mbdisc.js';
 import { WRITE_LEVELS, type WriteLevel } from './tools/common.js';
 
-export const VERSION = '1.6.2';
+export const VERSION = '1.7.0';
 
 const BASE_INSTRUCTIONS = `Tools for myIO smart home controllers (real hardware on the LAN; HTTP Basic auth).
 - Call myio_servers / myio_info first: the firmware version decides the feature set (3.12.x Due = base features; 4.x GIGA/Opta = everything).
@@ -27,6 +28,8 @@ const BASE_INSTRUCTIONS = `Tools for myIO smart home controllers (real hardware 
   scene load 1000+slot (button/timer targets). myio_find maps names to ids; myio_list_devices shows roles (thermostat, shutter-up/down, rgb:<group> ...).
 - Entities: myio_thermostats / myio_set_thermostat (zones), myio_shutters / myio_shutter (UP/DOWN pairs), myio_rgb / myio_set_rgb,
   myio_inputs / myio_press_button (wall buttons), myio_usensors / myio_set_usens (4.x universal sensors), myio_output (any output).
+- Setup helpers: myio_wait_input waits for a physical button press and says which input it was ("press the button by the door");
+  myio_wait_sensor finds the thermometer someone is warming by hand; myio_sensor_rescan searches the 1-Wire buses again (4.27+).
 - Configuration (editor level, MYIO_WRITE=config): myio_globals, myio_rename, myio_output_config, myio_input_config (button actions),
   myio_structures (protection pairs = shutters, joiners, groups), myio_scenes / myio_scene (configuration slots), myio_timers / myio_set_timer,
   myio_config_vars (any raw setting). Users and permissions need MYIO_WRITE=admin.
@@ -48,10 +51,17 @@ const BASE_INSTRUCTIONS = `Tools for myIO smart home controllers (real hardware 
   myio://<controller>/log/<today|yesterday|YYYY-MM-DD>, and the bundled Hungarian API reference myio://docs/index | /script | /flow | /chapter/<id>.
 - Prompts: heating_overview, why_not_switching (element), daily_diagnostics, new_flow_rule - each reads the controller first (language hu | en).`;
 
-export function instructions(enabled: Set<Toolset> = new Set(TOOLSETS)): string {
+/** a Modbus busz-felderites sora az utasitasban - csak ha az eszkozok be vannak kapcsolva (BuildOptions.modbusDiscovery) */
+const MODBUS_DISC_INSTRUCTIONS = `
+- Unknown Modbus device (controller 4.29+, Ext-RS485 panel firmware 0.8+): myio_modbus_discover finds it (bus speed, parity, A/B, address) and
+  myio_modbus_templates holds the device templates (list / get / apply / save). Read myio_modbus_discover action=guide first. The discovery
+  pauses Modbus on that panel while it runs; ask the user before a deep search (20-40 min). Templates create their write slots disabled.`;
+
+export function instructions(enabled: Set<Toolset> = new Set(TOOLSETS), modbusDiscovery = false): string {
+  const base = BASE_INSTRUCTIONS + (modbusDiscovery && enabled.has('expanders') ? MODBUS_DISC_INSTRUCTIONS : '');
   const off = TOOLSETS.filter(t => !enabled.has(t));
-  if (!off.length) return BASE_INSTRUCTIONS;
-  return `${BASE_INSTRUCTIONS}\n- Toolsets loaded (MYIO_TOOLSETS): ${TOOLSETS.filter(t => enabled.has(t)).join(', ')}. Not loaded: ${off.map(t => `${t} (${TOOLSET_INFO[t]})`).join('; ')} - `
+  if (!off.length) return base;
+  return `${base}\n- Toolsets loaded (MYIO_TOOLSETS): ${TOOLSETS.filter(t => enabled.has(t)).join(', ')}. Not loaded: ${off.map(t => `${t} (${TOOLSET_INFO[t]})`).join('; ')} - `
     + 'tools of those groups mentioned above are not available here; say so if the user needs them.';
 }
 export const INSTRUCTIONS = BASE_INSTRUCTIONS;
@@ -74,6 +84,10 @@ export interface BuildOptions {
   prompts?: boolean;
   /** az iras-szint kapu hibaszovege a MYIO_WRITE-os alapszoveg helyett */
   gateMessage?: (need: WriteLevel, have: WriteLevel) => string;
+  /** a Modbus busz-felderites + sablon-gyujtemeny eszkozei (myio_modbus_discover, myio_modbus_templates) es a myio_reference
+   *  topic=modbus. Alapbol KI: a Claude Directory-biralat alatt az eszkozlista (felhos szerver, npm-csomag) nem valtozhat -
+   *  a helyi szerver a MYIO_MODBUS_DISCOVERY=1 kornyezeti valtozoval kapcsolja be (index.ts). MODBUS_PLAN.md 9.8, 2026-11-18. */
+  modbusDiscovery?: boolean;
   /** a szerver neve/cime az MCP-kezfogasban */
   name?: string;
   title?: string;
@@ -83,9 +97,9 @@ export interface BuildOptions {
 export function buildServer(reg: Registry, write: WriteLevel = parseWriteLevel(process.env.MYIO_WRITE), enabled: Set<Toolset> = new Set(TOOLSETS),
                             opts: BuildOptions = {}): McpServer {
   const server = new McpServer({ name: opts.name ?? 'myio-mcp', version: opts.version ?? VERSION, title: opts.title ?? 'myIO smart home controller' },
-    { instructions: opts.instructions ?? instructions(enabled) });
+    { instructions: opts.instructions ?? instructions(enabled, !!opts.modbusDiscovery) });
   const tools = new Set<string>();
-  const ctx = { reg, write, tools, gateMessage: opts.gateMessage };
+  const ctx = { reg, write, tools, gateMessage: opts.gateMessage, modbusDisc: !!opts.modbusDiscovery };
   // 'read' szint: csak a readOnly-annotacios eszkozok (az annotacio-szabaly a tools/common.ts-ben: RO = semmit nem valtoztat)
   const filter: ToolFilter = (name, cfg) =>
     (write !== 'read' || cfg?.annotations?.readOnlyHint === true) && (!opts.allowTool || opts.allowTool(name, cfg));
@@ -97,6 +111,7 @@ export function buildServer(reg: Registry, write: WriteLevel = parseWriteLevel(p
   registerDiagTools(v('diag'), ctx);
   registerIntegrationTools(v('integrations'), ctx);
   registerBusTools(v('expanders'), ctx);
+  if (opts.modbusDiscovery) registerModbusDiscTools(v('expanders'), ctx);
   if (opts.resources !== false) registerResources(server, ctx);
   if (opts.prompts !== false) registerPrompts(server, ctx);
   return server;

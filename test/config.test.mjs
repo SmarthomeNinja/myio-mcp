@@ -30,7 +30,7 @@ after(async () => { await client.close(); await m4.close(); await m3.close(); })
 
 test('roster: 102 tools incl. 21 config tools', async () => {
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 102);
+  assert.equal(tools.length, 105);
   for (const n of ['myio_globals', 'myio_set_globals', 'myio_rename', 'myio_output_config', 'myio_set_output_config', 'myio_input_config', 'myio_set_input_config', 'myio_structures', 'myio_set_protection', 'myio_set_joiner', 'myio_set_group', 'myio_scenes', 'myio_scene', 'myio_timers', 'myio_set_timer', 'myio_delete_timer', 'myio_users', 'myio_user', 'myio_permissions', 'myio_set_permissions', 'myio_config_vars']) assert.ok(tools.find(t => t.name === n), n);
   assert.equal(tools.find(t => t.name === 'myio_user').annotations.destructiveHint, true);
 });
@@ -165,7 +165,7 @@ test('timers: list, create (new id), sunset offset, change, delete', async () =>
   const t3 = await callText(client, 'myio_timers', { server: 'Emelet' }); assert.match(t3.text, /#0: 19:00/);
 });
 
-test('users + permissions (4.x map, V3 gate)', async () => {
+test('users + permissions (4.x map, Due map via /userpermissions)', async () => {
   let r = await callText(client, 'myio_users');
   assert.match(r.text, /slot 0: admin - admin/); assert.match(r.text, /slot 1: editor - editor/);
   r = await callText(client, 'myio_user', { action: 'new', name: 'vendeg', password: 'titok', rights: 'user' });
@@ -174,14 +174,49 @@ test('users + permissions (4.x map, V3 gate)', async () => {
   r = await callText(client, 'myio_user', { action: 'set_rights', slot: 2, rights: 'editor' }); assert.match(r.text, /slot 2: vendeg - editor/);
   r = await callText(client, 'myio_user', { action: 'delete', slot: 0 }); assert.equal(r.isError, true);
   r = await callText(client, 'myio_permissions', { slot: 1 });
-  assert.match(r.text, /relay read: ALL/); assert.match(r.text, /relay write: none/); assert.match(r.text, /input hit: none/);
-  r = await callText(client, 'myio_set_permissions', { slot: 1, grant: { relay_write: [1, 2, 3], input_hit: [1] }, revoke: { relay_read: [64] } });
-  assert.match(r.text, /permissionsUser=1&rWritePermission=1&rWritePermission=2&rWritePermission=3&swHitPermission=1&rReadPermission=64/);
-  assert.match(r.text, /relay_write: 1, 2, 3/); assert.match(r.text, /input_hit: 1/);
+  assert.match(r.text, /relay read: ALL/); assert.match(r.text, /relay write: none/); assert.match(r.text, /input hit: none/); assert.match(r.text, /PCA write: none/);
+  m4.log.length = 0;
+  r = await callText(client, 'myio_set_permissions', { slot: 1, grant: { relay_write: [1, 2, 3, 3], input_hit: [1] }, revoke: { relay_read: [64] } });
+  assert.match(r.text, /Sent: 5 toggle\(s\) in 1 request\(s\)/);
+  assert.equal(m4.log.filter(l => /Permission=/.test(l)).join('&'), 'rWritePermission=1&rWritePermission=2&rWritePermission=3&swHitPermission=1&rReadPermission=64');   // a dupla 3 egyszer
+  assert.match(r.text, /relay write: 1, 2, 3/); assert.match(r.text, /input hit: 1\b/); assert.doesNotMatch(r.text, /WARNING/);
   r = await callText(client, 'myio_set_permissions', { slot: 1, grant: { relay_write: [1, 2] } }); assert.match(r.text, /Nothing to change/);
-  r = await callText(client, 'myio_set_permissions', { slot: 1, clear: true }); assert.match(r.text, /relay_read: none/);
+  r = await callText(client, 'myio_set_permissions', { slot: 1, grant: { relay_write: [2] }, revoke: { relay_write: [2] } }); assert.equal(r.isError, true); assert.match(r.text, /in both grant and revoke: relay_write 2/);
+  r = await callText(client, 'myio_set_permissions', { slot: 1, grant: { pca_write: [129] } }); assert.equal(r.isError, true); assert.match(r.text, /not on this controller: pca_write 129/);
+  r = await callText(client, 'myio_set_permissions', { slot: 1, clear: true }); assert.match(r.text, /relay read: none/);
   r = await callText(client, 'myio_user', { action: 'delete', slot: 2 }); assert.doesNotMatch(r.text, /slot 2:/);
-  r = await callText(client, 'myio_permissions', { slot: 1, server: 'Emelet' }); assert.equal(r.isError, true); assert.match(r.text, /not readable on firmware 3\.12\.30/);
+  // Due: a terkep a /userpermissions oldalrol jon (a reqUserpermissions.js ures) -> csak az elteres megy ki, visszaolvasva
+  r = await callText(client, 'myio_permissions', { slot: 1, server: 'Emelet' }); assert.equal(r.isError, false); assert.match(r.text, /relay read: ALL/); assert.match(r.text, /relay write: none/);
+  m3.log.length = 0;
   r = await callText(client, 'myio_set_permissions', { slot: 1, fill: true, grant: { relay_write: [5] }, server: 'Emelet' });
-  assert.match(r.text, /Sent: fillPermission=1&permissionsUser=1&rWritePermission=5/); assert.match(r.text, /toggles applied as given/);
+  assert.match(r.text, /Sent: fillPermission=1\n/); assert.match(r.text, /relay write: ALL/);
+  assert.equal(m3.log.filter(l => /Permission=/.test(l)).length, 1);   // csak a fill - az 5 mar BE volt, nem billen vissza
+  r = await callText(client, 'myio_set_permissions', { slot: 1, clear: true, server: 'Emelet' }); assert.match(r.text, /relay write: none/);
+});
+
+test('Due: a long permission list is split into <= 255 B requests, at command boundaries (3.12.44 truncated silently, 3.12.46 answers 413)', async () => {
+  const PCA = [...Array.from({ length: 34 }, (_, i) => 2001 + i), ...Array.from({ length: 28 }, (_, i) => 2041 + i)];   // 62 PCA-kimenet, mint a Redonyon
+  for (const ver of ['3.12.44', '3.12.46']) {
+    const m = await startMock({ version: ver });
+    const c = await connect({ MYIO_BASE_URL: m.url });
+    try {
+      let r = await callText(c, 'myio_set_permissions', { slot: 1, grant: { pca_write: PCA } });
+      assert.equal(r.isError, false, r.text);
+      assert.match(r.text, /Sent: 62 toggle\(s\) in [4-9] request\(s\) \(at most 255 B each\)/);
+      const big = m.posts.filter(n => n > 200);
+      assert.ok(big.length >= 4 && m.posts.every(n => n <= 255), `${ver}: ${m.posts}`);
+      const want = new Set(PCA.map(id => id - 2000));
+      assert.deepEqual(m.cfg.perm[1].pW.map((v, i) => (v ? i + 1 : 0)).filter(Boolean), [...want].sort((a, b) => a - b));
+      assert.doesNotMatch(r.text, /WARNING/);
+      // ugyanaz ujra: nem billen vissza semmi
+      r = await callText(c, 'myio_set_permissions', { slot: 1, grant: { pca_write: PCA } }); assert.match(r.text, /Nothing to change/);
+      // nyers lanc a Due-n: darabolva, egy parancs sem vesz el
+      const chain = Array.from({ length: 30 }, (_, i) => `r_descr*${i + 1}=Szoba%20${i + 1}`).join('&');
+      m.posts.length = 0;
+      r = await callText(c, 'myio_send_command', { commands: chain });
+      assert.match(r.text, /split into \d requests at command boundaries - the .* limit is 255 B per request/);
+      assert.ok(m.posts.length >= 3 && m.posts.every(n => n <= 255));
+      assert.equal(m.state.relays['29'].description, 'Szoba 30');
+    } finally { await c.close(); await m.close(); }
+  }
 });

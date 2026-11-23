@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { startMock } from './mock_myio.mjs';
+import { traceAgeText, traceNewest, flowTraceText, progTraceText } from '../dist/model_auto.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ENTRY = path.join(HERE, '..', 'dist', 'index.js');
@@ -32,7 +33,7 @@ const FLOW = { id: 1, name: 'Reggel', en: 1, when: { t: 'time', min: 390, days: 
 
 test('roster: 102 tools, round-3 annotations', async () => {
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 102);
+  assert.equal(tools.length, 105);
   for (const n of ['myio_flows', 'myio_flow_save', 'myio_flow', 'myio_flow_trace', 'myio_webhook_test', 'myio_scripts', 'myio_script_get', 'myio_script_save', 'myio_script', 'myio_reference',
     'myio_sysdiag', 'myio_metrics', 'myio_logs', 'myio_log', 'myio_files', 'myio_file_read', 'myio_file_write', 'myio_file_op', 'myio_fm_sync']) assert.ok(tools.find(t => t.name === n), n);
   assert.equal(tools.find(t => t.name === 'myio_flows').annotations.readOnlyHint, true);
@@ -61,6 +62,30 @@ test('flows: empty controller, validation blocks bad cards, save + describe + li
   assert.match(r.text, /#1 "Reggel" - enabled/);
   r = await callText(client, 'myio_flows', { raw: true });
   assert.equal(JSON.parse(r.text).flows[0].name, 'Reggel');
+});
+
+test('flows: mbdev (Modbus device lost/back, 4.30) and psim cards validate like the firmware parser', async () => {
+  const MB = { id: 7, name: 'SDM kiesett', en: 1, when: { t: 'mbdev', p: 1, a: 1, ev: 'lost' }, and: [{ t: 'psim', id: 1, on: 0 }], then: [{ t: 'rel', id: 5, act: 0 }, { t: 'psim', id: 1, act: 1 }] };
+  let r = await callText(client, 'myio_flow_save', { flow: MB, dry_run: true });
+  assert.equal(r.isError, false, r.text);
+  assert.match(r.text, /Modbus device 1 on panel 1 stops answering \(lost\)/);
+  assert.match(r.text, /presence simulation #1 is NOT running/);
+  assert.match(r.text, /presence simulation #1 START/);
+  r = await callText(client, 'myio_flow_save', { flow: { ...MB, when: { t: 'mbdev', p: 1, ev: 'back' }, and: [{ t: 'mbdev', p: 1, a: 0, on: 1 }] }, dry_run: true });
+  assert.equal(r.isError, false, r.text);
+  assert.match(r.text, /any Modbus device on panel 1 answers again/);
+  assert.match(r.text, /ALL Modbus devices on panel 1 answer/);
+  for (const [bad, re] of [[{ t: 'mbdev', p: 1, a: 1, ev: 'gone' }, /ev must be lost \| back/], [{ t: 'mbdev', p: 0, a: 1, ev: 'lost' }, /p must be the Ext-RS485 panel address/],
+                           [{ t: 'mbdev', p: 1, a: 248, ev: 'lost' }, /a must be the Modbus slave address/]]) {
+    r = await callText(client, 'myio_flow_save', { flow: { ...MB, when: bad }, dry_run: true });
+    assert.equal(r.isError, true, JSON.stringify(bad)); assert.match(r.text, re);
+  }
+  r = await callText(client, 'myio_flow_save', { flow: { ...MB, and: [{ t: 'mbdev', p: 1, a: 1, ev: 'lost', on: 0 }] }, dry_run: true });
+  assert.equal(r.isError, true); assert.match(r.text, /ev is a WHEN key/);
+  r = await callText(client, 'myio_flow_save', { flow: { ...MB, then: [{ t: 'psim', id: 5, act: 1 }] }, dry_run: true });
+  assert.equal(r.isError, true); assert.match(r.text, /presence-simulation profile 1\.\.4/);
+  r = await callText(client, 'myio_flow_save', { flow: { ...MB, then: [{ t: 'mbdev', p: 1, a: 1 }] }, dry_run: true });
+  assert.equal(r.isError, true); assert.match(r.text, /"t" must be one of/);
 });
 
 test('flow runtime: fire changes outputs, trace decoded, set_var, webhook test', async () => {
@@ -147,6 +172,8 @@ test('logs: listing, level filter, tail, Due format, missing day', async () => {
   assert.equal(r.isError, true); assert.match(r.text, /does not exist/);
   r = await callText(client, 'myio_log', { server: 'Emelet' });
   assert.match(r.text, /LOOP-STALL/);
+  r = await callText(client, 'myio_log', { date: '2020-01-01', server: 'Emelet' });   // Due < 3.12.44: a csupasz ut "socket hang up"-ot adna
+  assert.equal(r.isError, true); assert.match(r.text, /\/ev_log\/e_200101\.csv does not exist/);
   r = await callText(client, 'myio_logs', { kind: 'event', server: 'Emelet' });
   assert.match(r.text, /s:\/ev_log - 2 file\(s\)/);
 });
@@ -195,4 +222,60 @@ test('write level state: config writes refused, runtime flow actions allowed', a
     r = await callText(c, 'myio_flow', { action: 'set_var', id: 1, value: 1 });
     assert.equal(r.isError, false, r.text);
   } finally { await c.close(); }
+});
+
+// A trace-sor elso eleme az esemeny KORA ms-ban, a sorok idorendben jonnek (a legregebbi elol) - mint a vason (_Flow.ino / _Prog.ino).
+// A formazo regen boot ota mert idonek vette es az uzemidobol vonta ki: friss esemenynel az uzemido jott ki ("-3288s").
+test('trace age: the age is taken as it comes, readable units', () => {
+  assert.equal(traceAgeText(0), '0 s ago');
+  assert.equal(traceAgeText(4200), '4 s ago');
+  assert.equal(traceAgeText(59_400), '59 s ago');
+  assert.equal(traceAgeText(59_600), '1 min 0 s ago');
+  assert.equal(traceAgeText(3_288_000), '54 min 48 s ago');
+  assert.equal(traceAgeText(5_730_705), '1 h 35 min ago');
+  assert.equal(traceAgeText(90_000_000), '1 d 1 h ago');
+  assert.equal(traceAgeText(4_294_967_295), '49 d 17 h ago');   // a fw uint32 ms-ot ad
+  assert.equal(traceAgeText(NaN), '? ago');
+  assert.equal(flowTraceText([4200, 0, 11, 3, -1], new Map()), '[4 s ago] flow 0: webhook error (slot 3: gap brake / empty slot)');
+  assert.equal(progTraceText([3288, 8, 8, 0, 412], new Map([[8, 'Ablak-figyelo']])), '[3 s ago] script 8 "Ablak-figyelo": manual run (412 µs)');
+  assert.deepEqual(traceNewest([[30], [20], [10]], 2), [[10], [20]]);
+  assert.deepEqual(traceNewest(undefined, 5), []);
+});
+
+test('flow trace on the wire: a fresh entry is seconds old whatever the uptime, an older one shows its age, newest first', async () => {
+  let r = await callText(client, 'myio_flow_save', { flow: FLOW });
+  assert.equal(r.isError, false, r.text);
+  await callText(client, 'myio_flow', { action: 'fire', id: 1 });
+  m4.ageTrace(3_725_000);                                        // 1 h 2 min 5 s telik el
+  r = await callText(client, 'myio_flow', { action: 'fire', id: 1 });
+  assert.match(r.text, /\[[0-3] s ago\] flow 1 "Reggel": manual fire/);
+  assert.ok(!/ min ago\]/.test(r.text), 'only the entries of this firing');
+  r = await callText(client, 'myio_flow_trace', {});
+  const rows = r.text.split('\n').slice(1);
+  assert.match(rows[0], /\[[0-5] s ago\] flow 1 "Reggel": done/);   // a legujabb elol
+  const old = rows.findIndex(l => /\[1 h 2 min ago\] flow 1 "Reggel": manual fire/.test(l));
+  assert.ok(old > 0, r.text);
+  assert.ok(rows.slice(0, old).some(l => /\[[0-5] s ago\] flow 1 "Reggel": manual fire/.test(l)), 'the fresh firing is above the old one');
+  r = await callText(client, 'myio_flow_trace', { limit: 1 });      // a vagas a legujabbat tartja meg
+  assert.match(r.text, /1 of \d+ entries/); assert.match(r.text.split('\n')[1], /\[[0-5] s ago\] flow 1 "Reggel": done/);
+  r = await callText(client, 'myio_flow_save', { hook: { id: 2, name: 'ntfy', met: 1, url: 'http://ntfy.lan/x', body: '$dev $msg' } });
+  assert.equal(r.isError, false, r.text);
+  r = await callText(client, 'myio_webhook_test', { slot: 2 });
+  assert.match(r.text, /\[[0-3] s ago\] flow 0: webhook sent \(slot 2, HTTP 200\)/);
+  r = await callText(client, 'myio_webhook_test', { slot: 7 });     // ures slot
+  assert.match(r.text, /\[[0-3] s ago\] flow 0: webhook error \(slot 7: gap brake \/ empty slot\)/);
+  await callText(client, 'myio_flow_save', { delete: 1 });
+});
+
+test('script trace on the wire: a fresh run is seconds old, the older load shows its age, newest first', async () => {
+  let r = await callText(client, 'myio_script_save', { id: 3, source: '#name Teszt\n#every 1s\n#enabled 0\nvar n\nn = n + 1\n' });
+  assert.match(r.text, /compiled OK/);
+  m4.ageTrace(200_000);                                          // 3 min 20 s telik el
+  r = await callText(client, 'myio_script', { action: 'run', id: 3 });
+  assert.match(r.text, /\[[0-3] s ago\] script 3 "Teszt": manual run/);
+  r = await callText(client, 'myio_scripts', { trace: true });
+  const rows = r.text.slice(r.text.indexOf('trace (tseq')).split('\n').slice(1);
+  assert.match(rows[0], /\[[0-5] s ago\] script 3 "Teszt": manual run/);
+  assert.match(rows[1], /\[3 min 2\d s ago\] script 3 "Teszt": loaded \(20 instructions\)/);
+  await callText(client, 'myio_script', { action: 'delete', id: 3 });
 });

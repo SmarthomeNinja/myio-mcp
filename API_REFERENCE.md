@@ -128,6 +128,18 @@ Nyelvtan:
   állapot-lekérdezésből olvasd vissza.
 - Ugyanezek a parancsok POST-tal is mehetnek (`POST /info.json`, body: `nev=ertek`,
   `Content-Type: application/x-www-form-urlencoded`) — a web UI így küldi őket.
+- **A POST-törzs hosszkorlátja vezérlőnként más** (a nyers, URL-kódolt bájtok száma):
+  **4.x: legfeljebb 1023 bájt** — az ennél hosszabb törzsből egyetlen parancs sem fut le;
+  **[4.30.4+]** az API-végpontokon (`*.json`, pl. `POST /info.json`) a válasz `413 Payload Too
+  Large`, oldal-űrlapnál 200 + hibaüzenet a visszakapott oldalon (4.30.4 előtt mindig 200, a
+  hiba kívülről nem látszott). **Due 3.x: legfeljebb 255 bájt** — **[3.12.46+]** a hosszabbra
+  `413 Payload Too Large` a válasz, és egyetlen parancs sem fut le; **3.12.45-ig a 255 bájt
+  feletti rész CSENDBEN levágódott**, a csonka eleje (a félbevágott utolsó parancs is, pl.
+  `pWritePermission=6` a `…=67`-ből) lefutott, a válasz 200 volt. Napló mindkét generáción:
+  `System,HTTP-413,<ip>,len=<bájt>,user=<slot>,cnt=<n>` (azonos IP-ről az 1. és minden 50.). Hosszú listát ezért a
+  `&`-határokon darabolj (Due-n ~250, 4.x-en ~1000 bájtos kérésekre); a kiválasztó
+  parancsok (`permissionsUser=<slot>` stb.) hatása a kérések között megmarad, de ha más
+  kliens is dolgozik, minden darab elejére tedd ki újra.
 - **[3.12.30+ / 4.17.1+]** Érvénytelen (negatív, túl nagy vagy rossz tartományú) indexű/azonosítójú
   parancs **no-op**: nem ír, nem kapcsol (pl. `fet*4018=…`, `PCA*4018=…`, `r_ON=300`, `PCAMIN*0=…`),
   hibát sem ad, és a `&`-tel fűzött többi parancs ugyanúgy lefut. A fade-azonosítót (201+, 4001+)
@@ -172,6 +184,13 @@ Globálisok: `MYIOname=<név>`, `tz=<óra>`, `latitude=<fok>`, `longitude=<fok>`
 `hitTimeLimit=<ms>`, `pressTimeLimit=<ms>`, `protCooldown=<s>` **[4.x]**, `tempTimer`,
 `humTimer`, `mixerTimer`, `impulsePerUnit`, `consumptionUnit=<szöveg>`, `T_Sync=1`
 (NTP-szinkron most).
+
+1-Wire újrakeresés futásidőben **[4.27]**: `ow_scan=1` (editor-jog) — a vezérlő újra végigkeresi a saját 1-Wire
+buszait (GIGA), és RESCAN-kérést küld az online Ext16-panelek AUX-buszára (Opta; ugyanaz, mint az `ow_rescan*1=1`).
+A keresés a főciklusban fut, szenzoronként kb. 0,1 s-ig blokkol; az új hőmérő a következő szabad azonosítót kapja
+(`sensor.json`), a nevét a `t_descr*<ID>=<név>` állítja. Válasz-üzenet: `1Wire scan started`, busz nélküli
+vezérlőn hiba (`1Wire scan: no bus on this controller`). 4.26-ig a saját buszokat csak a boot és az admin
+`ReInit=1` kereste újra, az utóbbi is csak bekötött kijelzővel.
 
 Automatikus nyári időszámítás (EU) **[3.12.35 / 4.18.9+]**: `dst_auto=<0|1>` — **érték-szemantika**
 (nem billenő, ismételve is ugyanazt állítja), azonnal EEPROM-ba (47) íródik, mentés nem kell.
@@ -247,8 +266,13 @@ továbbá `sav_net`/`lo_net` **[4.x]**), `lo_all=<slot>` (ill. `lo_*`), `new_slo
 Felhasználók: `new_userSlot=1`, `del_userSlot=<n>`, `userName*<slot>=<név>`,
 `pwd*<slot>=<base64(user:pass)>`, `rights*<slot>=admin|editor|user`,
 `permissionsUser=<slot>` után `rReadPermission=<id>`, `rWritePermission=<id>`,
-`pRead/pWritePermission`, `swHit/swPressPermission`, `fRead/fWritePermission`,
-`clearPermission=1`, `fillPermission=1`.
+`pRead/pWritePermission`, `swHit/swPressPermission`, `fRead/fWritePermission`
+(**billenők**: mindegyik az adott elem jogát *invertálja*; index 1-alapú, PCA 1 = 2001,
+FET 1 = 101), `clearPermission=<slot>`, `fillPermission=<slot>` (a slot minden jogát
+törli / megadja, és egyben kiválasztja a slotot). A kiválasztott slot jogtérképe
+visszaolvasható: 4.x-en a fejléc nélküli `reqUserpermissions.js`, Due-n a `/userpermissions`
+oldal var-blokkja (`relayReadPermission=[…]`, `pcaWritePermission=[…]` stb., 1/0 elemenként)
+— billentés előtt olvasd ki, és csak az eltérőket küldd (a hosszkorlátot ld. fent).
 
 Hálózat **[4.x]**: `n_host=<név>`, `n_eth_pri=<0|1>`, `n_wifi_mode=<0|1|2>` (ki/STA/AP),
 `n_sta_ssid`, `n_sta_pw`, `n_ap_ssid`, `n_ap_pw`, `n_ap_ch`, majd `NetApply=1`
@@ -292,6 +316,7 @@ a `description` (név) mezőket is beleteszi — nevekre elég egyszer, indulás
 | `f_sens_out.json` | Ugyanaz teljes mezőkészlettel |
 | `d_sens_out.json` | + nevek (induló lekérdezéshez) |
 | `sens_IO.json` / `f_` / `d_` | **[4.3.12+/3.12.7+]** = sens_out + `inputs` (bemenet-állapotok) |
+| `inev.json` | **[4.27]** bemenet-események gyűrűje: az utolsó 16 gombnyomás sorszámmal (`?since=<sorszám>` = csak az újabbak; ld. 5.1) |
 | `output.json` / `d_output.json` | Relék + PCA + PWM + csoport + védelem + csatoló |
 | `relay.json` / `d_relay.json` | Csak relék |
 | `pca.json` / `d_pca.json` | Csak PCA-csatornák |
@@ -347,6 +372,17 @@ zárt kontakt). A `d_sens_IO.json`-ban `description` is (a bemenet neve). A szű
 kapcsoló- (`S`) jogosultsággal megy — jog nélküli bemenet ki sem megy. Régebbi
 firmware-en a sens_IO végpont nem létezik. Fontos: a 2 mp-es poll a rövid gombnyomást
 elkaphatja vagy sem — az `inputs` állapot-megjelenítésre való, esemény-számlálásra nem.
+
+**inev** **[4.27]** — bemenet-**események** (`inev.json`), a „nyomd meg a gombot” tanuláshoz:
+`{"inev":{"seq":57,"n":16,"ev":[{"n":56,"id":5,"e":"H","age":1240},{"n":57,"id":5,"e":"P","age":310}]}}`.
+A vezérlő az utolsó `n` (16) gesztust tartja egy gyűrűben, sorszámmal: `seq` = az utolsó esemény sorszáma
+(bootkor 0-ról indul), az elemekben `n` = sorszám, `id` = bemenet (1-alapú), `e` = `H` rövid nyomás / `P` hosszú
+nyomás (még nyomva) / `R` elengedés hosszú nyomás után, `age` = ennyi ms-mal a lekérdezés előtt történt.
+`inev.json?since=<sorszám>` csak az annál újabbakat adja — így két lekérdezés között egy rövid koppintás sem
+vész el (a gyűrű méretéig). Ha `seq` kisebb a kliens utolsó sorszámánál, a vezérlő közben újraindult. A
+gombszimuláció (`s_hit` / `s_press` / `s_release`) és a kijelző bemenet-próbája is eseményt ad; a letiltott
+bemenet nem. Szűrés: a kapcsoló- (`S`) jogosultság — jog nélküli bemenet eseménye ki sem megy (a sorszám attól
+még lép). Minden jog-szint kérheti, felhőn át is (10/C).
 
 ### 5.2 `info.json`
 
@@ -664,6 +700,20 @@ szerinti egységgel; **[4.16.2+]** `stat_cla` is: `measurement`, a kWh-usens (`s
 közötti értékek előjel nélkül mentek ki). Konfiguráció: gyökér `mqtt.jsn` (web: MQTT oldal, `mq_*` paraméterek
 + `MqttSave`); soros diagnosztika: `?mqtt.`.
 
+**Web-paraméterek** (GET/POST param-út, pl. POST `info.json`; editor-jog; 4.x és DUE azonos nevekkel):
+
+| Kulcs | Jelentés |
+|---|---|
+| `mq_en`, `mq_ret`, `mq_ha`, `mq_sub`, `mq_cmd`, `mq_chg_btn` / `mq_chg_out` / `mq_chg_act`, `mq_per_out` / `mq_per_tmp` / `mq_per_hum` / `mq_per_sdm`; **[4.x]** `mq_per_us`, `mq_eco`, `mq_tls` | **váltó (toggle)**: a küldött érték közömbös, minden előfordulás átbillenti a kapcsolót — a `mq_ha=1` a bekapcsolt discoveryt KI-kapcsolja |
+| `mq_host`, `mq_user`, `mq_pw`, `mq_cid`, `mq_base`; **[4.x]** `mq_tkey` | szöveg |
+| `mq_port`, `mq_qos` (`0`/`1`), `mq_pers` (5..65000 s), `mq_cslot` (parancs-user-slot) | szám |
+| `MqttSave=1` | mentés + újracsatlakozás; addig a módosítás csak RAM-ban él (újraindításkor elvész) |
+| `MqttRediscover=1` | HA discovery újraküldése újracsatlakozás nélkül |
+
+Scriptből: előbb olvasd ki az aktuális állapotot (a `GET /mqtt` válaszának JS-változói:
+`mq_en=…;`, `mq_ha=…;`, `mq_sub=…;` stb.), csak azt a kulcsot küldd, amelyiket **váltani**
+akarod (egy kérésben egy kulcsot legfeljebb egyszer), a végén `MqttSave=1`. Lásd 12./6.
+
 ### MQTT subscribe — vezérlés + külső szenzorok **[4.5 · DUE 3.12.31+, a külső szenzorok csak 4.x]**
 
 A `mq_sub` főkapcsolóval a kliens a CONNACK után feliratkozik (új állapot: `MQ_ST_SUB=7`),
@@ -795,9 +845,10 @@ a párosításkor generált ECDSA-kulcs és a hozzárendelt user-slot dönti el.
 
 | `myioc/<devId>/status` | eszköz→bróker (retained) | `online` / `offline` — LWT, **[4.5]** *és* szándékolt lezáráskor (kikapcsolás, bróker-váltás) kiadott búcsú-üzenet |
 | `myioc/<devId>/evt` | eszköz→bróker | események (pl. `pair-ok:<keyId>`) |
-| `myioc/<devId>/perm/<keyId>` | eszköz→bróker (retained) | a kulcs slotjának jog-leírója (lásd lent); **[4.25]** `"x":{"t":1,"cm":880,"ur":1\|2,"fw":"<verzió>"}` képesség-mező |
+| `myioc/<devId>/perm/<keyId>` | eszköz→bróker (retained) | a kulcs slotjának jog-leírója (lásd lent); **[4.25]** `"x":{"t":1,"cm":880,"ur":1\|2,"fw":"<verzió>"}` képesség-mező; **[4.27]** benne `"p":1` = aláírt feltöltés (`clput`) |
 | `myioc/<devId>/perm/<keyId>/rsp` | eszköz→bróker | **[4.25]** a kulcsra titkosított válasz-chunkok: aláírt olvasás + parancs-nyugta (lásd lent) |
 | `myioc/<devId>/stat` | eszköz→bróker (retained) | állapot-publikálás (későbbi kör) |
+| `myioc/<devId>/aipair` | eszköz→bróker (NEM retained) | **[4.26]** rövid kódos AI-párosítás letétje, a szerver kulcsára titkosítva (lásd lent) |
 | `myioc/vendor/msg` | gyártó→flotta (sub, QoS0, **retained**) | **[4.5]** gyártói csatorna — vendor-aláírt boríték (lásd lent) |
 
 **Parancs-keret** (bináris, a `/cmd` payloadja):
@@ -810,7 +861,8 @@ kulcsonként szigorúan monoton `counter` (floor QSPI-n, +64-es — **[4.25]** +
 perzisztálva). A `command` sapkája 192 bájt, **[4.25]** 880 bájt (a kliens a jog-leíró `x.cm` mezőjéből tudja).
 
 **Foglalt parancsok** (nem jutnak a parancs-értelmezőbe): `clbye` — a keretet aláíró kulcs önmagát törli;
-**[4.25]** `clget:<off>,<len>:<út>` — aláírt olvasás, lásd lent.
+**[4.25]** `clget:<off>,<len>:<út>` — aláírt olvasás, lásd lent; **[4.27]** `clput:<off>,<total>:<út>` + újsor +
+nyers adat — aláírt feltöltés, lásd lent.
 
 **[4.25] Olvasó-alagút és parancs-nyugta** (`_CloudGet.ino`, `cloud_rsp.h`). A `/cmd`-re küldött
 `clget:<off>,<len>:<út>` keretre a vezérlő a web-kiszolgáló **változatlan** kezelőjét futtatja a kulcs
@@ -819,7 +871,7 @@ user-slotjának jogaival, és a választ a `myioc/<devId>/perm/<keyId>/rsp` tém
 Opta 12 288 bájt); a kliens a következő ablakot új kéréssel kéri.
 
 - **Fehérlista (csak olvasó végpontok).** Bármely jog: `info.json`, a `sens_out`/`sens_IO` család,
-  `fm.json` (user-jogú fióknak a saját `/users` fa). Editor: `usensor.json`, `sysdiag.json`, `metrics`,
+  **[4.27]** `inev.json`, `fm.json` (user-jogú fióknak a saját `/users` fa). Editor: `usensor.json`, `sysdiag.json`, `metrics`,
   `flowtrace.json`, `prog.json`, `ai.json`, `shelly.json`, `shellyscan.json`, `alarm.json`, `link.json`,
   `linkscan.json`, `brstat.json`, `ledfx.json`, `dali.json`, `dmx.json`, `modbus.json`, `mbval.json`, és a
   beállító oldalak (`setup`, `output`, `input`, `pcaout`, `groups`, `broadlink`, `computherm`, `shelly`,
@@ -844,6 +896,27 @@ Opta 12 288 bájt); a kliens a következő ablakot új kéréssel kéri.
 - **Hibák:** `400` hibás kérés, `403` felhőn át nem elérhető, `404` nincs ilyen, `503` `busy` (egyszerre egy
   válasz készül) / `no memory`.
 
+**[4.27] Aláírt feltöltés** (`_CloudGet.ino` `CloudPutRx`): a Flow-szabályok és a myIO Script programok mentése
+felhőn át. A `/cmd` keret parancsa `clput:<off>,<total>:<út>\n<adat>` — a fejléc-sor (újsorig) után a keret többi
+része nyers bájt (egy keretben a parancs-sapkáig, kb. 850 bájt adat); `<total>` a teljes fájlméret, `<off>` az
+eddig elküldött hossz.
+
+- **Csak két fajta út írható:** `flows.jsn` (legfeljebb 131 072 bájt) és `prog/<N>.txt` (N = 1…16, Optán 1…8;
+  legfeljebb a program-forrás plafonja: 8192, Optán 4096 bájt). Minden más út `403` — a beállítás-fájlok, a
+  web-fa és a fájlkezelő írása felhőn át nincs.
+- **Jog:** a kulcs slotja legalább editor (a HTTP PUT szabálya); user-jogú kulcs `403`.
+- **Sorrend és csere:** a darabok sorban jönnek (`off` = az eddig megírt hossz; `off` 0 új feltöltést nyit), a
+  kliens a nyugtára vár a következő előtt. A vezérlő ideiglenes fájlba ír, és csak az utolsó darab után
+  (`off` + hossz = `total`) cseréli a cél-fájlt egy átnevezéssel — a félbemaradt feltöltés a régi tartalmat nem
+  rontja el (a HTTP PUT előbb töröl).
+- **Nyugta** (a válasz-csatornán, bit2): `200` + az eddig megírt hossz (közbenső darab) vagy `OK <total>` (kész);
+  `400` hibás keret, `403` jog vagy nem írható út, `409` `restart` (nem a várt darab: elölről), `413` túl nagy,
+  `500` írás-hiba, `503` `busy` (egy másik kulcs éppen tölt).
+- **Újratöltés:** a szokásos parancs a siker után: `flow_reload=1`, illetve `prog_reload=<N>`.
+- **Képesség:** a jog-leíró `x.p` = 1. A kliens **csak** ilyen vezérlőnek küldhet `clput`-keretet: a 4.27 előtti
+  firmware a keretet közönséges parancsként értelmezné.
+- Eseménynapló: `System,CLOUD,put-ok|put-deny|put-fail,<slot>,k<keyId>,<út>`; soros `?cloud.`: `CLOUD-PUT` sor.
+
 **[4.25] A felhős kulcs korlátai** (minden kulcsra, az appéra is): legfeljebb **editor** jog (admin jogú
 slot kulcsa is editorként fut), és tiltott parancsnevek: felhasználók és jogok (`userName`, `pwd`, `rights`,
 `new_userSlot`, `del_userSlot`, `permissionsUser`, `*Permission`), `cl_*`, `CloudSave`, `n_*`, `NetApply`,
@@ -851,6 +924,22 @@ slot kulcsa is editorként fut), és tiltott parancsnevek: felhasználók és jo
 `RdpLock`, `RestorePrevious`, `ReInit`, `LogOut`. A tiltott név `403`-as nyugtát és `deny:` eseményt ad.
 Eseménynapló: `System,CLOUD,cmd-ok|cmd-deny|cmd-block,<slot>,k<keyId>,<parancs, 48 karakter>` (a jelszót
 hordozó párok értéke kicsillagozva).
+
+**[4.26] Rövid kódos AI-párosítás** (`_CloudSettings.ino` `CloudAiPairStart`, AI_SETUP_PLAN.md 4.). A hosszú
+`myioc://c?d=…` link helyett a user egy 6 karakteres kódot ír be az AI (felhős MCP-connector) engedélyező oldalán.
+Indítás: a kijelző pgCloud lapjának *Új kód* gombja (`!dt=1.`, *Mégse* = `!dt=0.`), a /cloud oldal `cl_aipair=1` /
+`cl_aistop=1` paramétere (**csak admin**), vagy sorosan `aipair.` / `aipair=0.`. A vezérlő megkeresi az `ai`
+login-nevű slotot, vagy létrehozza („AI”, **editor**, véletlen jelszó, minden elemre olvasás+írás), arra
+párosítási ablakot nyit (5 perc, a licenc-limit érvényes), és 30 s-onként letétbe küldi:
+`myioc/<devId>/aipair` = `[ver=1][0x41 'A'][devPub(64)]` ‖ `CloudRspSeal(K, flags 0, ctr 0, seq 0, salt, plain)`,
+ahol `K = SHA-256("myIO-rsp1" ‖ ECDH(eszköz-privát, szerver-publikus).x ‖ devPub ‖ szerver-publikus)` (a 4.25-ös
+válasz-csatorna KDF-je, a user-kulcs helyén a szerver statikus P-256 kulcsával), és
+`plain = [kód 6 ASCII, Crockford base32: 0-9 A-Z I/L/O/U nélkül][ttl mp (2 BE)][a v4 párosító payload]` (bájtra
+ugyanaz, mint a link tartalma, `CloudPairPayloadBuild`). A kód csak mutató: egyszer használható, az ablak
+zárásával érvénytelen. A /cloud oldal `cl_ai='<állapot>,<hátralévő mp>,<kód>'` változója: 0 nincs, 1 él, 2
+csatlakozott, 3 lejárt, 4 megszakítva. Eseménynapló: `System,CLOUD,ai-slot-new|ai-pair-start|ai-pair-ok|
+ai-pair-expired|ai-pair-cancel,<slot vagy keyId>`. A `cl_*` név felhőn át tiltott, tehát AI-kódot csak helyben
+(kijelző, web, soros) lehet kérni.
 
 **Párosítás-keret** (a `/pair` payloadja, csak admin-nyitott 5 perces ablakban):
 `[ver(1)=2][keyId(1)][upub(64)][mac(32)]`, ahol `mac = HMAC-SHA256(ptok, ver‖keyId‖upub)`
@@ -898,6 +987,7 @@ párosítás-műveletek és a `CloudSave` is.
 | `cl_bnew=<b64url>` | **[4.4]** `broker.new` provisioning-blob feltöltése (vendor-aláírt bróker-cím-frissítés; sapka 1024 b64-karakter / 768 bájt raw) |
 | `cl_vnack=<seq>` | **[4.5]** gyártói tájékoztató nyugtázása (a szalag elrejtése; csak a megjelenítést zárja le) |
 | `cl_lic=<b64url>` | **[4.6]** licenc-blob beillesztése (vendor-aláírt 'L' boríték; devId-kötött, seq-floorral; prod-ban IS él — ez az offline út) |
+| `cl_feat=<bit>` | **[4.28]** funkció helyi ki/be **váltása** (toggle; `<bit>` = a funkció bit-indexe 0..6, lásd „Funkció-jogok”); **csak admin**, azonnal perzisztál (EEPROM); amit a licenc nem tartalmaz, arra hiba („not in the license”) |
 
 **broker.new blob** (`cl_bnew`; a kiadó-CLI a repo `broker_new.py`-a): `[ver=1][seq u32 BE]`
 + TLV-mezők (`[type u8][len u16 BE][body]`, ismeretlen type átugorható): `H` host, `P` port
@@ -942,6 +1032,39 @@ mentőöv). Üzenet-típusok:
 verify-út**; mindig a nagyobb `seq` győz, a forrástól függetlenül (a beégetett/kézi/topicos
 út egyenrangú). Nyugta: retained JSON a `myioc/<devId>/lic/ack`-ra
 (`{"v":1,"seq":…,"rc":0,"feat":"0x…","yexp":…,"fw":"…"}`) — a fleet `licstatus` ebből olvas.
+**[4.28]** új mező: `"fon":"0x…"` = a ténylegesen **aktív** funkciók (jog és helyi kapcsoló).
+
+**[4.28] Funkció-jogok (feature-kapu).** A licenc `F` (örökös) maszkjának bit-kiosztása —
+**végleges**, kihelyezett licencek hordozzák; új funkció mindig a következő szabad bitet kapja:
+
+| Bit | Érték | Funkció | Oldal | Mi áll le, ha nem aktív |
+|---|---|---|---|---|
+| 0 | `0x01` | MQTT | `/mqtt` | az MQTT-kliens bont, nem csatlakozik |
+| 1 | `0x02` | KNX | `/knx` | KNXnet/IP (ETS-) illesztő, GA-tábla szerkesztése/mentése, eszköz-nyilvántartás |
+| 2 | `0x04` | DALI | `/dali` | szint-küldés a DALI-panelre, háttér-olvasás, nyilvántartás |
+| 3 | `0x08` | DMX | `/dmx` | szint-küldés a DMX-panelre, nyilvántartás |
+| 4 | `0x10` | Modbus | `/modbus` | író-push (WR_SET), tábla-szerkesztés/mentés |
+| 5 | `0x20` | MIA | `/ai` | a perc-tick (tanulás, előfűtés, fűtés-szünet); az élő termosztát-tartások azonnal feloldódnak |
+| 6 | `0x40` | myIO Script | `/prog` | egy program sem fut (ütemezett, kézi, boot) |
+
+Az `Y` (éves) maszk bit 0 = myIO Cloud (`0x01`) — csak kijelzés, a kapu a bróker-ACL.
+
+- **Jog** = a licenc `F` maszkja; licenc **hiányában** a buildbe égetett alap
+  (`CFG_FEAT_DEFAULT`, a gyártói konfigból; ha nincs megadva: minden funkció — a licenc
+  nélküli eszköz viselkedése nem változik).
+- **Helyi kapcsoló** = `cl_feat` (EEPROM 49); csak a jogosult funkciót tudja ki- és
+  visszakapcsolni, jogot nem ad.
+- **Aktív** = jog ÉS helyben nincs kikapcsolva. Csak az aktív funkció él.
+- A nem aktív funkció **menüpontja** eltűnik: a fw minden beállító-oldal `<head>`-jébe
+  `var navOff='/mqtt,/prog';` listát tesz (a `setupnav.js` ezt szűri; ha minden aktív, a
+  változó nincs). Az **oldala** helyett `303 → /cloud`. A **paraméterei** (`mq_*`, `prog_*`,
+  `progen*`, `ai_*`, `dali_*`, `dmx_*`, `mb_*`, `knx*`, `KnxSave`) hatástalanok. A
+  **beállításai megmaradnak** (semmi nem törlődik).
+- Korlát: a KNX-panel GA-táblája és a Modbus-panel olvasó táblája a **panelen** fut — a
+  kapu a beállítást és az M7-oldali írást/illesztőt állítja meg, a betöltött táblát nem törli.
+- A `/cloud` oldal JS-változói (verzió-kapu a jelenlétük): `cl_fk` = a fw által ismert
+  bitek, `cl_fl` = jog, `cl_fo` = aktív. Soros diag: a `?cloud.` kimenet `feat:` sora
+  (`jog / aktiv / alap / helyben-ki`). Eseménynapló: `System,FEAT,local,0x…`.
 
 **[4.7] Üzenet-előzmény (eszköz-oldali üzenet-tár):** az elfogadott `N` tájékoztatók
 utolsó 6 példánya a rejtett rendszer-kötet `vmsg.jsn`-jébe kerül (külön fájl — a
@@ -954,6 +1077,8 @@ törölheti; azonos `seq` újrakiadása a legfrissebb bejegyzést írja felül (
 változáskor): kis JSON a gyártói toolingnak (TUI részletlap nem-LAN esete) —
 `{"v":1,"bseq":…,"brk":<aktív bróker-index>,"brkn":<lista-hossz>,"keys":…,"kmax":…,
 "pw":<párosítás-ablak, perc>,"vnseq":…,"vnack":…,"lseq":…,"lang":"HU","fw":"…"}`.
+**[4.28]** új mezők: `"fl"` = funkció-jog, `"fo"` = aktív funkciók (decimális bitmaszk;
+licenc nélküli eszközön is kimegy — a `lic/ack` csak kiadott licencnél létezik).
 A `lang` a setup **Default Language** (DL, EEPROM 9) nyelvkódja (0=EN, 1=HU, 2=FR,
 3=DE — a langinfo.json indexelése): a gyártó ebből tudja, milyen nyelven kell az
 ügyféllel kommunikálni — **célzott** vendor-üzenethez elég ez az egy nyelvi változat
@@ -1053,6 +1178,10 @@ hum: `ch` = DHT-csatorna 0..7; `src:"dht"` legacy-ként még elfogadott),
 helyettesítőbe kerül; a küldés aszinkron, a lánc nem vár rá),
 `{"t":"psim","id":<profil 1..4>,"act":0|1|2}` (**[4.24.0]** jelenlét-szimuláció
 leállít/indít/vált); `and[]`-ben `{"t":"psim","id":..,"on":0|1}` (fut-e).
+**[4.30.0]** Modbus-eszköz (10/E.8): `when` = `{"t":"mbdev","p":<panel-cím>,"a":<slave 1..247, 0 = a panel bármelyik eszköze>,"ev":"lost|back"}`
+(az eszköz kiesett / visszajött; trace-érték = a slave-cím); `and[]`-ben `{"t":"mbdev","p","a","on":0|1}` (1 = válaszol – `a`=0-nál a panel
+MINDEN figyelt eszköze; 0 = kiesett – `a`=0-nál VAN kiesett; a még nem jelentkezett eszköz egyiket sem teljesíti). A `p` 1..bővítő-szám, az
+`ev` csak `when`-ben áll (AND-ban, ill. a `sun`-on a `lost`/`back` hibás kártya), `then`-ben nincs `mbdev`.
 Érvénytelen kártya → az adott flow letiltva (S_ERR), a többi fut; hiányzó/rossz
 `formatVersion` → az egész fájl elutasítva.
 
@@ -1188,6 +1317,7 @@ keverő-termosztát), külön AUX-érték nincs. `expaux.jsn` (root): `{"expaux"
 | Paraméter | Hatás |
 |---|---|
 | `ow_rescan*1=1` | azonnali ROM-keresés minden online Ext16-panelen |
+| `ow_scan=1` | **[4.27]** ugyanez, és a vezérlő saját 1-Wire buszai is (ld. 4.2) |
 | `ow_del*<EEPROMID>=1` | nem jelenlévő szenzor regisztrációjának törlése (a slot ROM-ja nullázva, a hőmérő-slot felszabadul, az ID-k nem csúsznak) |
 | `t_descr*<EEPROMID>=<név>` | a meglévő Bemenetek-oldali név-kulcs (változatlan) |
 
@@ -1495,16 +1625,16 @@ SENS-lapozás: `[0x00][start]` → `[n][≤32 rekord, id ≥ start][köv. lap ke
 Mező k → SENS id k; író-slot k ← a panel 16-os raszter-blokkjának k. csatornája (P-id 2000+(cím−1)·16+k+1, SETOUT-raszter).
 Nevek a vezérlőn: `modbus.jsn` `{"modbus":{"v":1,"p":[{"a","n","pr","f":[32],"w":[16]}]}}`.
 **[4.19.1]** Eszköz-rekordok (név + sablon slave-címenként, max 16/panel) ugyanitt: `"da":[cím…],"dn":[név…],"dt":[sablon-id…]` (párhuzamos tömbök, csak a foglalt rekordok);
-a `"s"` (push-források) és a `"f"`/`"w"` tömbök a 64/32-es kerethez.
+a `"s"` (push-források) és a `"f"`/`"w"` tömbök a 64/32-es kerethez. **[4.30]** `"dl":[LOST-idő s…]` (a `da`-val párhuzamos; 0 = alap).
 
 **`modbus.json`:** `{"modbus":{"expq","expt":[0/1/2/3/4…],"senq","pcaq","sq","usmin":9,"sdm":1 [4.18.13+],"msg","panels":[{"a","on","ld" (árnyék beolvasva),
 "pend" (auto-SAVE vár),"name","preset","st":[32/40 B STATUS]|null,"cap":[blokk,mező,író-slot] [4.19],"feat" [4.19] (b3 = J13-port/híd [4.21]),"j13" (STATUS-ext [39] = EXPBUS_J13ST_* élő állapot [4.21]),"cfg":[8],"blk":[[8]×cap0],"fld":[[8]×cap1],"wr":[[12]×cap2],"ws":[elem-ID×cap2] [4.19],
-"val":[[f32,st,age s]×cap1],"fn":[cap1 név],"wn":[cap2 név],"dev":[{"a":slave,"n":név,"t":sablon-id}…] [4.19.1],"raw":{"st","slave","func","d":[…]}|null,"scan":{"st","cur","f":[…]}|null}]}}`.
+"val":[[f32,st,age s]×cap1],"fn":[cap1 név],"wn":[cap2 név],"dev":[{"a":slave,"n":név,"t":sablon-id,"l":LOST-idő s [4.30]}…] [4.19.1],"ds":[…],"rst":[…] [4.30, 10/E.8],"raw":{"st","slave","func","d":[…]}|null,"scan":{"st","cur","f":[…]}|null}]}}`.
 STATUS: `[1]` flagek (b0 RUN, b1 DIRTY, b2 BUS_OK, b3 RAW_BUSY, b4 SCAN_RUN, b5 UNSYNC, b6 MASTER_LOST, b7 AUTO_SDM **[panel-fw 0.3+]** = keresés fut, `[24..25]` = az épp próbált baud/keret), `[2..3]` kérés, `[4..5]` ok,
 `[6..7]` timeout, `[8..9]` CRC, `[10..11]` kivétel, `[12]` blk_ok bitmap, `[13..15]` utolsó kivétel kód/slave/func, `[16..19]` uptime s,
 `[20..23]` ms az utolsó válasz óta, `[24]` baud-kód, `[25]` keret, `[26..28]` aktív blokk/mező/író-slot, `[29]` HAL-hiba,
 `[30]` A/B-állapot **[panel-fw 0.2+]** (b0 most cserélt, b1 automatikus, b2 rögzítve, b7 = a panel ismeri; 0.1-en 0), `[31]` automatikus váltások. VAL st: 0 nincs, 1 OK, 2 STALE, 3 kivétel, 4 timeout.
-**`mbval.json`** (2,5 s polling): `{"mbval":{"panels":[{"a","on","ld" [4.18.13+],"pend","st","val"}]}}`. **[4.18.13+]** A `modbus.json` újraolvassa
+**`mbval.json`** (2,5 s polling): `{"mbval":{"panels":[{"a","on","ld" [4.18.13+],"pend","st","val","ds","rst" [4.30]}]}}`. **[4.18.13+]** A `modbus.json` újraolvassa
 az árnyéket, ha a STATUS `[26..28]` eltér az árnyékból számolttól (a panel auto-SDM-je maga írta a táblát); a lap online/offline-váltásra és
 erre a változásra magától újratölt.
 
@@ -1523,15 +1653,154 @@ erre a változásra magától újratölt.
 | `mb_scan*<p>*<from>*<to>*<func>*<reg>=1` | cím-pásztázás (eredmény `scan`) |
 | `mb_n<p>_<i>=<név>` / `mb_w<p>_<i>=<név>` / `mb_pn<p>=<név>` / `mb_pr<p>=<preset-id>` | nevek (modbus.jsn) |
 | `mb_dn<p>_<cím>=<név>` / `mb_dt<p>_<cím>=<sablon-id>` **[4.19.1]** | eszköz neve (≤ 24) / sablon-azonosítója (≤ 16) a slave-címhez (modbus.jsn da/dn/dt; üres név ÉS üres sablon = a rekord felszabadul; 16 rekord/panel) |
+| `mb_dl<p>_<cím>=<s>` **[4.30]** | az eszköz LOST-ideje (0 = alap 30 s, különben 5..3600; a figyelő legalább a leglassabb blokk 3 periódusát + 2 s-ot veszi) – modbus.jsn `dl`; 0 + üres név + üres sablon = a rekord felszabadul |
 | `mb_dev*<p>*<régi-cím>*<új-cím>=1` **[4.19.1]** | eszköz átcímzése (új 1..247: a régi cím minden blokkja és író-slotja az újra, a név-rekord vele) vagy törlése (új 0: a blokkok mezői + a blokkok + az író-slotok üresek, nevük és push-forrásuk törlődik, a rekord felszabadul); a panel validál |
 
-**Sablon-könyvtár [4.19.1]** (a lap egy listában mutatja, forrás-csoportokkal): (1) beépített `js/modbus.js` `MB_PRESETS` (SDM120/230/630, XY-MD02 ellenőrzött; **[4.22]** `sdm630_fast` / `sdm120_fast` = a P-blokk 0,1 s-os gyors blokk, a többi 1–5 s; Deye, Growatt, Huawei, SunSpec 103 kiindulás);
+**Sablon-könyvtár [4.19.1]** (v2 – meta-adatok, azonosító aláírás, beküldés, adatlap: **10/E.7**; a lap egy listában mutatja, forrás-csoportokkal): (1) beépített `js/modbus.js` `MB_PRESETS` (SDM120/230/630, XY-MD02 ellenőrzött; **[4.22]** `sdm630_fast` / `sdm120_fast` = a P-blokk 0,1 s-os gyors blokk, a többi 1–5 s; Deye, Growatt, Huawei, SunSpec 103 kiindulás);
 (2) CDN: `<Host>modbus/index.json` = `{"v":1,"dev":[{"id","name","file","verified","vendor"}]}` + eszközönként `<Host>modbus/<file>` (Host = a Booster CDN-gyökere, alapból `https://okoslak.hu/ext2/`);
 (3) saját: a vezérlő QSPI `/modbus/<id>.json` fájljai (lista `GET /fm.json?vol=q&dir=/modbus`, írás `PUT /modbus/<id>.json` – előtte `GET /fm_mkdir?vol=q&d=/modbus` –, olvasás `GET /modbus/<id>.json`, törlés `GET /fm_del?vol=q&f=/modbus/<id>.json`).
 **Sablon-formátum** (mindhárom forrásban azonos): `{"id","name","vendor","verified":0|1,"baud":9600,"frame":0..3,"blk":[{"func","start","count","period","fast":1 (**[4.22]** a periódus ×0,1 s; FAST_BLK nélküli panelen s-ben megy)}],"fld":[{"b":blokk-index a sablonban,"ofs","dt","ord","bit","sc","sf","n","u","s":SDM-cél 201..221,"inv"}],"wr":[{"func","reg","dt","ord","mode":0 be/ki|1 szint,"off","on","per","n"}]}`
 – a `*`-ra végződő név = nem ellenőrzött kiindulás. „Mentés sablonként” = ugyanez az eszköz soraiból (a web építi, `fld.n` a tárolt név). Alkalmazás = `mb_cfg` (ha kérik) + `mb_blk`/`mb_fld`/`mb_n` + `mb_wr`/`mb_w` (push, forrás nélkül) + `mb_dt`/`mb_dn` parancs-sor a szabad sorokra.
 **Panel-tábla export** (web, JSON-letöltés): `{"myio_modbus":2,"panel","name","cfg":[8],"cap":[3],"blk":[[i,…8 B]],"fld":[[i,…8 B]],"wr":[[i,…12 B]],"ws":[[i,elem-ID]],"fn":[[i,név]],"wn":[[i,név]],"dev":[{a,n,t}]}`; import = `mb_clr` + a sorok ugyanarra az indexre (a kereten túliak kimaradnak) + nevek/források/eszközök (a blokk flags b0..1 – be + gyors – megőrizve **[4.22]**).
 **ModbusVars (a /modbus var-blokkja) [4.19.1]**: `mb_q, mb_senq, mb_pcaq, mb_sq, mb_expq, mb_usmin, usens_description` + `mb_rq` (RQ), `mb_fq` (FQ, FETPWM-buildben, különben 0), `relay_description`, `PCA_description`, `fet_description` (FETPWM) – a push-forrás elem-választójához.
+
+### 10/E.7 Modbus busz-felderítés, sablon-gyűjtemény v2, AI-munkarend (mbscan.json) **[4.29+, panel-fw 0.8+]**
+
+**Mire való:** ha a Modbus-buszra ismeretlen beállítású eszköz kerül, a **panel** végigpróbálja a busz-beállításokat (8 sebesség × 4 keret × 2 A/B irány) és a
+címeket, azonosítja, ami válaszol, és tényeket + tanács-kódokat ad. A vezérlő indít / becsültet / leállít, a futást a főciklusból **nem blokkolva** figyeli,
+az eredményt JSON-ban adja (`mbscan.json`) és fájlba írja – ebből dolgozik a web-felület, a helyi MCP és bármely AI. Terv + vas-eredmények: `MODBUS_PLAN.md` 9.
+Feltétel: vezérlő 4.29+, a panel STATUS-ext `[38]` b5 = `EXPBUS_MBFEAT_DISC` (panel-fw 0.8+; a `modbus.json` `feat` & 32). Licenc nem kell (a Modbus alapfunkció).
+
+**Két mód:** **Keresés** (mód 0, ~1,5–2 perc): a már bekötött eszközök, a mostani beállítás minden címen, majd a 13 további gyakori beállítás mindkét A/B iránnyal a gyári
+alapcímeken (1, 2, 3, 4, 5, 10, 16, 17, 100, 247) – találatnál azon a beállításon a teljes tartomány. **Mély** (mód 1, ~20 perc bizonyított A/B iránnyal, ~40 perc
+anélkül): mind a 32 beállítás × 1..247; a találat azonnal látszik, és az első új eszköz beállításának végignézése után megáll (`FIRST_STOP`; a `CONTINUE` opcióval végigmegy).
+Fázisok (`run.ph`): 1 hallgatás (idegen mester keresése; ha talál, a pásztázás **el sem indul**: állapot 4), 2 az ismert eszközök, 3 pásztázás (FC3 reg 0, 100 ms-os
+válasz-timeout), 4 azonosítás (FC1..4-ujjlenyomat, FC 0x2B/0x0E Device ID, FC 0x11 Server ID, a próbalista olvasásai), 5 záró ellenőrzés (beragadt-e ismert eszköz).
+**A futás alatt ezen a panelen a Modbus szünetel:** nincs lekérdezés és írás, a mezők 3 perc után `STALE`-re mennek, a RAW / SCAN „foglalt”; a végén a busz-cfg és a
+polaritás visszaáll, az írók újraküldik a képüket. **Az SDM-változók (201..221) közben az utolsó mért értéken állnak** – nincs elavulás-jelzésük, a fogyasztás-szabályzó
+(energia-menedzser, fogyasztás-vezérelt kimenetek) ezzel számol tovább, ugyanúgy, mint bármely más kommunikáció-kiesésnél.
+
+**POST-paraméterek** (EDITOR; `_ModbusDisc.ino`):
+
+| Paraméter | Hatás |
+|---|---|
+| `mb_disc*<p>*<mód>*<from>*<to>*<opts>=<maszk>` | indítás: mód 0 keresés / 1 mély; **mód + 128 = csak időbecslés** (nem indul, az eredmény a `mbscan.json` `est` / `estm` mezőjében, s); from/to 0/0 = 1..247; opts b0 `BOTH_POL` (mély: mindkét A/B irány akkor is, ha az egyik bizonyított), b1 `NO_LISTEN`, b2 `FORCE` (idegen mester mellett is), b3 `CONTINUE` (mély: az első találat után is), b4 `SLOW` (a pásztázás is a busz-timeouttal: lassú eszközök), b5 `FC4` (hallgató címen FC4-gyel is); maszk = kombó-bitek (baud-kód·4 + keret), 0 = a mód listája. Ha a lap / az AI nem küldött próbalistát, a vezérlő az alapot küldi |
+| `mb_dstop*<p>=1` | leállítás: a részeredmény megmarad (állapot 3), a busz-cfg visszaáll |
+| `mb_dprobe*<p>*<i 0..7>*<fc>*<reg>=<n>` | a próbalista i. helye: fc 1..4 (0 = törlés), n = 1..4 regiszter (FC1/2: 1..64 bit); a panel minden ÚJ eszközön lefuttatja, a válasz első ≤ 8 bájtja az eredménybe kerül. Futás közben nem írható. Az első saját hely után az alap-lista nem megy ki |
+| `mb_dcn<p>=<szöveg ≤ 64>` | a szerelő megjegyzése: mit kötött rá (az eredménybe kerül; a próbalista sorrendjéhez és az AI-nak) |
+
+**`mbscan.json`** (a felhős alagúton is): `{"mbscan":{"panels":[{"a","on","cap" (1 = a panel tud felderíteni),"est","estm" (az utolsó becslés s + a módja),"note",
+"run":null|{"st" 1 fut / 2 kész / 3 leállítva / 4 nem indult: másik mester,"ph" 1..5,"pct","el","tot" (eltelt / becsült teljes s),"mode","opts","id" (futás-sorszám),"addr","baud","frame","pol" (a most próbált)},
+"bus":{"baud","frame","pol"} (a keresés előtti beállítás),"ndev","nnew","fl","flags":[…],"hints":["H1"…],"sniff":null|{"baud","frame","pol","addr":[…]} (a hallott idegen forgalom),
+"detail" (1 = a részletek is megvannak),"dev":[{"addr","baud","frame","pol","fl","new","known","ans","garbled","slow","stuck","fp":[FC1..FC4: 0 nem próbált / 1 ok / 2 kivétel / 3 hallgat],
+"delay" (a leglassabb válasz, ms),"ok","bad","exc" (az első kivétel-kód),"idm","id":[gyártó, típus, verzió],"sid" (Server ID, hex),"pr":[{"i" (próba-hely),"st" 1 ok / 2 kivétel,"hex"}]}],
+"stat":[{"baud","frame","pol","rx","err","ok","found"}],"probes":[{"i","fc","n","reg"}]}]}}`.
+`flags` (a panel jelzői): `OTHER_MASTER`, `NOISE`, `SILENT`, `POL`, `OTHER_COMBO`, `KNOWN_LOST`, `KNOWN_STUCK`, `COLLIDE`, `NO_NEW`, `TRUNC` (16-nál több eszköz), `SLOW`, `PARITY`, `NEW_STUCK`, `FIRST_STOP`.
+Eszköz `fl` bitek: 0x01 új, 0x02 ismert (a táblában van), 0x04 válaszol, 0x08 sérült válaszok, 0x10 lassú, 0x20 fordított A/B, 0x40 más beállítás, 0x80 a futás végére elhallgatott.
+A lap a futás alatt 2,5 s-onként kéri; a részleteket (statisztika, azonosítók, próba-adatok) a vezérlő a futás végén olvassa ki a panelről (`detail` 0 → 1, néhány másodperc).
+
+**Eredményfájl:** `QSPI /modbus/scan/last.json` (az előző három: `prev1.json` … `prev3.json`; futásonként egy írás, 1–3 KB): `{"mbscan":{"what","time":"ÉÉÉÉ-HH-NN ÓÓ:PP","fw","panel":{… mint fent …}}}`.
+A felhős connectoron a `myio_file_read`-del olvasható. **Eseménynapló:** `System,MBDISC,START|FOUND|DONE|STOPPED|ABORT_OTHER_MASTER,<panel>,<részlet>` (a `FOUND` a mély keresésben is azonnal).
+**Navbar-üzenet [4.29.1]:** `M73` = új eszközt talált a panel, `M74` = a keresés véget ért (kész / leállítva / másik mester miatt el sem indult) – aki más lapon van, az is látja.
+
+**Tanács-kódok** (`hints`; a vezérlő számolja a jelzőkből, a szöveget a felület / az MCP adja):
+
+| Kód | Mikor | Teendő |
+|---|---|---|
+| H1 | végigfutott keresés, új nincs, ismert eszköz válaszol | az új valószínűleg ugyanazon a gyári címen van: a régi(ek) A/B-jét kikötni, újra keresni, az újat átcímezni, visszakötni |
+| H2 | sérült válaszok egy címről (`COLLIDE`) | két eszköz lehet egy címen: az egyiket kikötni |
+| H3 | csak fordított polaritással válaszol, ismert eszköz nélkül | A és B felcserélve: A/B automatikus / cserélt, vagy a két eret megcserélni |
+| H4 | néma vonal minden beállításon | táp, A/B, GND, lezárás; be van-e kapcsolva az eszköz Modbus-portja; valóban Modbus RTU-e |
+| H5 | bájtok jönnek, érvényes keret nincs, semmi nem válaszol rendesen | listán kívüli sebesség / nem Modbus RTU / zavar → mély keresés |
+| H6 | másik mester a buszon (`sniff` = a sebessége és a hallott címek) | két mester ütközik: külön busz / panel kell |
+| H7 | az új eszköz más beállításon van, mint a busz | az eszközt átállítani, vagy a buszt erre állítani (`mb_cfg`) |
+| H8 | lassú válasz | a busz-timeoutot emelni (≥ 1,5 × késés + 50 ms) |
+| H9 | él, de a 0-s regiszterre kivételt ad | normális – a regisztertáblája kell |
+| H12 | egy eszköz a futás végére elhallgatott (`KNOWN_STUCK` / `NEW_STUCK`) | beragadhatott a más sebességű keretektől: tápját ki-be kapcsolni |
+| H13 | az új eszköz A/B-je fordítva van a többihez képest | azon az eszközön megcserélni a két eret |
+
+**Vas-leletek** (SDM630, 2026-11-18): a 8N1 és a 8N2 a vezetéken nem különböztethető meg (egy eszköznek számít); más paritású kérésre az eszköz keret-hibás bájtokkal felel –
+ez nem ütközés (sérült válasz csak ≥ 4 ép bájttal); fordított polaritáson minden kérés után 1 hibás bájt jön. Mérések: keresés 69–98 s; mély keresés más címre (2) és beállításra
+(19200 8O1) átállított mérővel 929 s.
+
+**Sablon-gyűjtemény v2** (`okoslak.hu/ext2/modbus/`, forrás `WEB_cdn/modbus/`; a beépített `MB_PRESETS` az internet nélküli tartalék, a kettő szerkezete azonos):
+- **`index.json` v2** (a régi felület a `dev[]` `id`/`name`/`file`/`verified` mezőit olvassa – azok maradnak): `{"v":2,"dev":[{"id","name","file","verified":0|1|2,"vendor","model",
+  "cat":"meter|inverter|heatpump|sensor|hvac|io|other","ver","date","author","manual" (http/https link),"bus":{"baud","frame":"8N1","addr" (gyári cím)},"wr" (író-slotok száma),"probe":[…]}]}`.
+  `verified`: 0 = kiindulási pont (a listában `*`), 1 = közösségi, vason kipróbálva (a beküldő), 2 = a myIO vason kipróbálta.
+- **Sablon v2** (a 10/E.6 formátuma + meta): `id` (a-z, 0-9, _ -, ≤ 16 = fájlnév), `name`, `vendor`, `model`, `cat`, `ver`, `date`, `verified`, `author`, `manual`, `addr`, `baud`, `frame`,
+  `notes_hu` / `notes_en` (saját rövid összefoglaló: cím- és sebesség-átállítás menete, figyelmeztetések – gyártói PDF nem kerül a CDN-re), `probe[]`, `fw`, `blk[]`, `fld[]`, `wr[]`.
+- **Azonosító aláírás** (`probe[]`, ≤ 8 elem): `{"fc":1..4,"reg","n","ofs" (szó a válaszon belül),"dt" (mint a mezőknél 1 u16 … 8 f64),"ord","sc" (×10^sc),"min","max"}` vagy `"in":[értékek]` vagy
+  `"hex":"…"` (a nyers adat eleje) helyett; `"opt":1` = nem kizáró; `{"id":"regex"}` = a Device ID szövegeire (gyártó típus verzió, kis-nagybetű nem számít). **Illesztés:** egyező olvasás +1,
+  egyező Device ID +3; ami a futásban nem szerepelt (`probes`), az semleges; a nem egyező vagy válasz nélküli olvasás kizár (kivéve `opt`); a legtöbb pont nyer, holtversenynél az ellenőrzöttebb.
+  **Próbalista:** a gyűjtemény (+ a saját sablonok) aláírásaiból, elöl azoké, amelyekre a megjegyzés szavai illenek, aztán az ellenőrzöttek; azonos olvasás egyszer; a végén – ha fér – holding 0..1.
+  A „Mentés sablonként” az eszköz élő értékeiből javasol aláírást (hihető feszültség 50..500 V + frekvencia 40..70 Hz, ezek híján hőmérséklet / pára) + a felderítés Device ID-je.
+- **Író-slotos sablon** (parancsot is küld az eszköznek): a listában ⚠; alkalmazáskor az író-slotok **kikapcsolva** jönnek létre (`mb_wr … =0`) – a felhasználó választ forrást és kapcsolja be.
+- **Beküldés:** a „Mentés sablonként” párbeszéd [Beküldés a myIO-nak] gombja letölti a `modbus_<id>.json`-t, a vágólapra teszi, és `mailto:sablon@myio.hu` levelet nyit (a levelező nem tud
+  csatolni: a fájlt kézzel kell; a JSON csak ~1800 karakteres URL-ig megy a törzsbe). Közvetlen nyilvános feltöltés nincs. **Kurálás:** `python3 tools/mb_tpl_add.py <fájl | ->`
+  (séma-ellenőrzés, duplikátum: azonos id → `--update` = új verzió, azonos gyártó + típus → `--force`; `--verified 2`; `--presets` = a beépítettek átvitele; `--check` – a `build_cdn.py` is futtatja).
+- **Sablon-adatlap:** [Adatlap] gomb → nyomtatható összefoglaló (busz, megjegyzés, regisztertábla 0-alapú címmel + hexa + a kézikönyvek 4xxxx / 3xxxx jelölésével, író-slotok, aláírás);
+  „Letöltés PDF-ben” = `window.print()`. A web-rész a lazy `js/mbtpl.js`-ben él (ha nem tölthető be, a mentés a régi két kérdéssel megy).
+
+**MCP:** a helyi `myio-mcp`-ben a `MYIO_MODBUS_DISCOVERY=1` kapcsoló mögött (alapból KI; a felhős connector eszközlistája nem változik):
+`myio_modbus_discover` – `action` `guide` (az alábbi munkarend) | `estimate` | `start` (`mode` search / deep; `note`; `from` / `to`; `both_ab`, `slow`, `fc4`, `keep_going`, `force`; a mély keresés
+csak `confirm=true`-val indul) | `stop` | `status` | `wait` (az első új találatig / a futás végéig / `timeout_s`-ig vár; `known_new`) | `result` (eszközök, nyers próba-adat, tanácsok szöveggel, illő sablon, következő lépés);
+`myio_modbus_templates` – `list` (`query`) | `get` (`id`) | `apply` (`id` vagy `template`, `panel`, `slave`, `bus`, `to_sdm`; az írók kikapcsolva) | `save` (saját sablon a vezérlőre: `from_slave` = az eszköz soraiból,
+vagy teljes `template`; `notes_hu` / `notes_en`, `manual`, `tested`); `myio_reference topic=modbus` = a munkarend + ez a fejezet. A gyűjtemény címe: `MYIO_MODBUS_CDN` (a csomagban pillanatkép a tartalék).
+
+**AI-munkarend** (az asszisztensnek; a vezérlő és a panel nem böngészik és nem fordít – tényt gyűjt és tanácsot ad):
+1. Kérdezd meg a szerelőt, mit kötött be (gyártó, típus, mi áll a címkén), és mit szeretne tőle (mely értékek, kell-e vezérlés).
+2. Nézd meg a gyűjteményt (`myio_modbus_templates action=list query=…`). Ha van sablon → 6. lépés.
+3. Indíts **Keresést** (`myio_modbus_discover action=start note="…"`): ~1,5–2 perc, közben azon a panelen szünetel a Modbus – előtte mondd meg. `action=wait` szól, amint új eszköz jelenik meg vagy vége; utána `action=result`.
+4. Kövesd a tanácsokat (H1: a régi eszközt kiköttetni, újra keresni, az újat átcímezni; H3 / H13: A/B; H4: bekötés, táp, Modbus-port; H6: másik mester; H7: más beállítás; H12: táp ki-be).
+   Ha a Keresés nem talál újat: a **Mély keresés előtt kérdezz rá** – `action=estimate mode=deep` megmondja az időt (20–40 perc); csak igen után indítsd (`confirm=true`). Bármikor leállítható, és az első új eszköznél magától megáll.
+5. Ismeretlen eszköz: keresd meg a kézikönyvét / regisztertábláját a neten (a saját webkeresőddel), és foglald össze a felhasználó nyelvén: busz-beállítás, a cím és a sebesség átállítása, regisztertábla, írható regiszterek, figyelmeztetések.
+6. 2–3 regisztert igazolj nyers olvasással (`myio_modbus_set action=raw`), mielőtt bármit felépítenél (hihető érték: ~230 V, ~50 Hz, értelmes hőmérséklet …). A címek 0-alapúak (a kézikönyvek 40001-e = holding 0).
+7. Építsd fel a táblát: sablonból (`myio_modbus_templates action=apply`) vagy kézzel (`myio_modbus_set action=block / field`), és kösd a mezőket univerzális szenzorokhoz a felhasználó igénye szerint.
+   A sablonból létrejött író-slotok KIKAPCSOLTAK: csak akkor kapcsold be, ha a felhasználó a regiszterét megerősítette. **Eszköz-regiszterbe (nyers FC5/6/16, író-slot) csak a felhasználó kifejezett igenjével írj.**
+8. Mentsd sablonként megjegyzéssel (`myio_modbus_templates action=save`; `notes_hu`: cím- és sebesség-átállítás, mire kell figyelni; `manual` = link; `tested=true` csak ha az értékeket a valódi eszközön ellenőriztétek).
+9. Ajánld fel a beküldést: a `/modbus` lapon az eszköz kártyáján „Mentés sablonként” → „Beküldés a myIO-nak” (levél a sablon@myio.hu címre, a fájlt kézzel kell csatolni). A gyűjteményt a myIO kurálja – magától semmi nem megy fel.
+
+### 10/E.8 Modbus-eszköz kiesése és visszatérése (Flow, Script, MQTT, napló) **[4.30.0, panel-fw 0.9+]**
+
+**Elv:** a firmware TÉNYT ad (eszköz-állapot + LOST/BACK esemény), a reakciót a felhasználó építi Flow-ban vagy Scriptben (pl. ahol az SDM
+visszwatt-védelmet lát el, ott a fogyasztót kell lekapcsolni). Beégetett beavatkozás nincs; egyetlen kivétel a **tartás** (lent).
+
+**Eszköz** = slave-cím egy Modbus-szerepű panelen, amelyre engedélyezett OLVASÓ blokk mutat (a csak-író eszköz állapota ismeretlen; legfeljebb
+16/panel). A vezérlő (`_ModbusDev.ino`) 2 s-onként, nem blokkolva kéri a panel **STATUS-ext2**-jét (`0x10 [0x01][0x02]` → 60 B, panel-fw 0.9+:
+`[0..39]` = STATUS-ext, `[40..41]` blk_exc u16 (az i. blokk utolsó válasza Modbus-kivétel volt), `[42..57]` blokkonként az utolsó **életjel**
+kora s-ben (érvényes keret: OK VAGY kivétel; 0..253, 254 = ≥ 254 s, 255 = a blokk-sor óta még nem jött / nem élő), `[58]` reset-ok
+(`EXPBUS_RSTF_*`: b0 IWDG, b1 NRST-láb, b2 szoftver, b3 POR), `[59]` IWDG-resetek száma; képesség: STATUS-ext `[38]` b6 `EXPBUS_MBFEAT_ALIVE`;
+régi panelen a vezérlő a `blk_ok` bitmapből dolgozik – ott a kivétel nem életjel). Az árnyék (blokk/mező-tábla) bootkor a háttérben is betöltődik.
+- **LOST:** ha a legfrissebb életjel kora eléri a **LOST-időt** (eszközönként: `mb_dl`, alap 30 s; legalább a leglassabb blokk 3 periódusa
+  + 2 s). A panel kiesése ugyanígy hat (nincs STATUS → nincs életjel). Az ismeretlen (bootóta nem jelentkezett) eszköz is LOST lesz a LOST-idő után.
+- **BACK:** a LOST eszköz első, 5 s-nál frissebb életjele. Az első életjel (ismeretlen → online) csendes.
+- **Busz-felderítés / cím-SCAN alatt** (STATUS `SCAN_RUN`) az élő eszközök nem eshetnek ki; utána a teljes LOST-idő kell.
+- **Csak friss tényből:** online panelnél LOST-döntés csak 10 s-nál frissebb STATUS-válasz után (a panel saját kor-adatából), offline panelnél
+  (az M4 szerint) az utolsó életjel óta eltelt időből. Loop-elakadás (pl. OTA-staging, SD-gond), foglalt raw-út vagy álló M4 alatt nincs döntés –
+  utána az első STATUS dönt (így egy hosszú elakadás nem ad hamis LOST + BACK párt és nem süti el a flow-kat).
+
+**`ds`** (`modbus.json` + `mbval.json` panel-objektumában): `[[slave, állapot 0 ismeretlen/1 online/2 LOST, kor s (−1 = még nem jött),
+utolsó LOST/BACK ideje (a vezérlő `now()`-ja: HELYI idő unix-számként, 0 = még nem volt), LOST-idő s], …]`; **`rst`** = `[reset-ok, IWDG-szám]`
+(STATUS-ext2 `[58..59]`; régi panelen `[-1,-1]`). A Flow-lap var-blokkja: `flow_mb=[[panel, slave, "név"], …]` (az `mbdev`-kártya választója).
+
+**Események** (állapotváltáskor): evlog `System,MODBUS,LOST,<panel>,<slave>,<név>` / `System,MODBUS,BACK,<panel>,<slave>,<név>,<kiesés s>`
+(a panel watchdog-újraindulása után az első STATUS-ext2-nél, resetenként egyszer – a kulcs a panel IWDG-számlálója: `System,MODBUS,PANEL_RESET,<panel>,0,IWDG,uptime=,n=`); navbar **M75** (kiesett) /
+**M76** (visszajött); MQTT `<base>/mbdev/<panel>/<slave>/status` = `online|offline` (retained; ismeretlent nem küld; minden (újra)csatlakozáskor
+újra); Flow `mbdev` WHEN-trigger (10/D).
+
+**Lekérdezés:** Flow AND `mbdev` (10/D); Script `mbdev(panel, slave)` → 1 / 0 / NaN, `mbage(panel, slave)` → s az utolsó életjel óta / NaN (10/G.6).
+**Érvénytelenség:** a kiesett eszköz mezőiből töltött uSzenzorok LOST-nál azonnal STALE-re mennek (`sen_State` = 2: `sens()` NaN; beállított
+failsafe-nél az első billentés azonnal; evlog `System,USensor,HIBA-forras kiesett,<id>`; visszaút: az első friss érték); egy SDM-változó (201..221)
+érvénytelen, ha minden Modbus-forrás-mezőjének eszköze LOST (`sdm()` NaN). **Tartás (user-döntés):** amíg egy SDM-változó forrása kiesett, a
+fogyasztás-szabályzó (Energiamenedzser) nem lép, és az SDM-aktivátoros (201..221) relé/FET/PCA-kimenetek nem értékelnek – a Flow/Script
+beavatkozását nem írják felül; BACK után a mért értékkel folytatják.
+**Panel-oldal (fw 0.9):** kiesett slave (minden élő blokkja ≥ 3 kimaradt kör; csak-író slave-nél minden író-slotja ≥ 3 kudarc): az írásai 2 s helyett
+10 s-onként próbálnak; az első érvényes válaszára MINDEN író-slotja újraküldi a képét; STALE → OK változatlan értékkel is `rev++` (a vezérlő
+uSzenzora azonnal friss). IWDG (~1 s) élesítve; `CFG 0x04 [0x7E][1][1]` (`EXPBUS_CFG_TEST_HANG`) = IWDG-próba (a panel ~1 s múlva újraindul).
+
+**Ragadós háttér-üzenet [4.30]** (minden modulra): a háttérből (nem kérés-kontextusból) beállított navbar-kódot (M59 Flow, M60 SG, M61–M63 QSPI,
+M64/M65 riasztó, M66/M67 program, M68–M70 MIA, M73–M76 Modbus) a kérés-végi törlés NEM viszi el, amíg egy lap ki nem rajzolta (a `message=`
+változó kiment), legfeljebb 60 s-ig – korábban a nyitott lap JSON-pollja (pl. `mbval.json` 2,5 s) mindet lenyelte. Egyszerre egy kód tartható.
 
 ### 10/G.1 Fájlformátum, direktívák
 
@@ -1634,7 +1903,9 @@ Jelölés: *R* olvasó (kifejezésben áll, NaN = érvénytelen), *K* kontextus 
 | `temp(idx\|"név")` | R | °C, NaN | 1Wire hőmérő eepromIndex 1..100; nyers −12600 / < −5500 / > 12500 (hibajel, billegés) → NaN | mellékhatás-mentes kereső az `_EepromIDByBusAndID/_tempsByBusAndID` táblán (×100 → /100) — NEM a `TempByEepromID` (az fantom-szenzort szúrna be) |
 | `hum(ch)` | R | %, NaN | páraszenzor-csatorna 0..HUMQ−1 | `humidity[ch]/10` |
 | `sens(id)` | R | érték, NaN | usens 0..SENQ; `sen_State != 1` (sosem jött / STALE) → NaN | `sen_Value[id]/10` |
-| `sdm(id)` | R | érték, NaN | SDM630 mezők 201..221 (API 3. fejezet) | `ValueOfSDM(id)/10` |
+| `sdm(id)` | R | érték, NaN | SDM630 mezők 201..221 (API 3. fejezet); **[4.30]** NaN, ha a forrás Modbus-eszköze kiesett (10/E.8) | `ValueOfSDM(id)/10`; `SdmLost(id)` → NaN |
+| `mbdev(p, a)` **[4.30]** | R | 1 / 0 / NaN | Modbus-eszköz (panel-cím, slave 1..247): 1 = válaszol, 0 = kiesett (LOST), NaN = ismeretlen (nincs ilyen figyelt eszköz / még nem jelentkezett) | `MbDevState()` (_ModbusDev.ino) |
+| `mbage(p, a)` **[4.30]** | R | s, NaN | másodperc az eszköz utolsó életjele óta (OK vagy kivétel-válasz) | `MbDevAgeS()` |
 | `gvar(n)` | R | egész, NaN | Flow-globális változó n 1..32 | `FlowVarGet(n)` (új publikus olvasó) |
 | `hour()` `minute()` `second()` | R | 0..23 / 0..59 | TimeLib; nincs időszinkron (`year()==1970`) → NaN | |
 | `dow()` | R | 1..7 | a hét napja, **1 = hétfő … 7 = vasárnap** | `(weekday()+5)%7+1` |
@@ -1900,8 +2171,7 @@ hibaszöveg, és a lokális változók `név=érték` soronként. `!progreload*<
   mellékhatás-mentesek.
 - Aktivátoros (termosztát-vezérelt) kimenetre a parancs elutasítva (precedens: a Link sem alkalmaz
   távoli állapotot ilyen kimenetre). Minden parancs a proxy-rétegen (védelem/csatoló/időzítő).
-- A `prog/N.txt`-t a statikus út user-jogú (2) fióknak nem adja ki (404; **[4.26.2]** az SD-kártyás
-  tartalék-ágon sem — addig a tükrözött fájl onnan kijött) → **a forrásban ettől még ne legyen titok**;
+- A `prog/N.txt` statikus úton minden hitelesített usernek kiszolgálódik → **a forrásban titok nincs**;
   a `/~q/prog/` út user-jog 2-nek 403.
 - Reserved-String: a pool egyszeri SDRAM-foglalás (`MqttTlsSdramAlloc`, GIGA ≈ 104 KB: 16 ×
   `ProgSlot` + 128 trace), a loop alatt nulla heap; Optán belső heap (init-körű), felezett sapkák.
@@ -1958,8 +2228,9 @@ await fetch(base + '/command:r_INV=5', {headers: hdr});   // válasz HTML, nem k
 3. **Egy kérés egyszerre**, `Connection: close`, poll ≥ 1 s — a vezérlő socketjei végesek.
 4. A `command:` válasza HTML nyugta, **nem** tartalmazza az új állapotot — poll-ból olvasd vissza.
 5. Csoport-ID: a parancsok 1–20-at és 501–520-at is elfogadnak; a JSON mindig 501+-t ad vissza.
-6. A billenő (toggle) konfig-parancsok (`relaysInvert=<id>` stb.) **invertálnak**, nem
-   beállítanak — előbb olvasd ki az aktuális állapotot.
+6. A billenő (toggle) konfig-parancsok (`relaysInvert=<id>`, az MQTT-kapcsolók `mq_en` /
+   `mq_ha` / `mq_sub` / `mq_cmd` stb.) **invertálnak**, nem beállítanak — a küldött érték
+   (`=1` / `=0`) közömbös; előbb olvasd ki az aktuális állapotot.
 7. A 3.12.2 (Due) firmware-ből a **[4.x]** jelű funkciók hiányoznak (Network-parancsok,
    Shelly, usensor, Link, a 4.x OTA-csomag, naplószintek stb.; a Due saját OTA-útja: 6.) — a dokumentum eleji
    verzió-jelölés szerint, futásidőben a `version` mezőből (`info.json`) dönts.
@@ -1974,8 +2245,10 @@ oldalak. Két dolgot érdemes tudni róla, ha hasonló automatizálást írsz:
 
 - **Írás POST-tal.** A varázsló `POST /info.json` törzsében küldi a `&`-fűzött parancsokat,
   nem `GET /command:`-mel. Oka: a GET-út **nem URL-dekódol**, ezért ott az ékezetes vagy
-  szóközös név elromlana. A POST-törzs dekódolódik (`+` → szóköz, `%xx` → bájt), a
-  hosszkorlát 1024 bájt, túllépéskor a vezérlő hibát jelez (nem csonkít csendben).
+  szóközös név elromlana. A POST-törzs dekódolódik (`+` → szóköz, `%xx` → bájt). A
+  hosszkorlát (4. fejezet eleje) 4.x-en 1023, Due-n 255 bájt; a varázsló a `&`-határokon
+  4.x-en 900, Due-n 240 bájtos csomagokra bont (a 2026-11-23 előtti varázsló Due-n is 900-zal
+  dolgozott — ott a csomagok vége 3.12.45-ig csendben elveszett, **[3.12.46+]** 413-at kap).
 - **Toggle-fegyelem.** A billenő parancsokat csak akkor küldi ki, ha a kívánt érték eltér a
   jelenlegitől — különben két azonos parancs kioltaná egymást (ld. 12. fejezet 6. pontja).
 
@@ -2064,6 +2337,7 @@ Opta-oldal (`_ExpProgram.ino`):
 - JSON: minden bővítő-eredetű elem (`PCA`, `inputs`, `sensors` [klasszikus hőmérő EEPROMID], `groups`) `"off":1` mezőt kap, CSAK ha a gazda-bővítő offline
   (hiánya = elérhető). `info.json`: `"exp_q"`, `"exp_online":[cím…]`. Web var-blokk: `expOn` (bitmaszk), `expQ`.
 - MQTT: `<base>/exp/N/status` = online|offline (retained); a bővítő-elemek HA discovery-je `availability` listát kap (`<base>/status` + `<base>/exp/N/status`, `avty_mode: all`).
+  **[4.30]** Modbus-eszközönként `<base>/mbdev/<panel>/<slave>/status` = online|offline (retained; 10/E.8).
 - evlog: `System,Expander,LOST,addr=N` / `BACK,addr=N,fs=<state>/<mode>,fsCount=,rst=,iwdg=,prog=match|DIFF[,locked]` / `PROG,addr=N,rows=,crc=` / `PROG-FAIL,…` / `OFFLINE,addr=N,boot`.
 - Beállítások: `expfs.jsn` (root) `{"expfs":{"<cím>":{"fs","to","ma","rl","rt","as","ts","tp","pre":"<32 hex>"}}}`.
 - Web-paraméterek: `exf_fs<cím>=0..3`, `exf_to<cím>=s`, `exf_ma<cím>=0|1`, `exf_rl<cím>=0|1`, `exf_rt<cím>=0|1`, `exf_as<cím>=0|1`,

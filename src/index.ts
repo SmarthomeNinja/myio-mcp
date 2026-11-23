@@ -22,6 +22,9 @@
  *   MYIO_TIMEOUT_MS       HTTP timeout (default 10000)
  *   MYIO_MIN_GAP_MS       minimum pause between two requests to the same controller (default 150; the Due's HTTP refuses bursts)
  *   MYIO_INSECURE_PARSER  "0" = strict Node HTTP parser (default "1": lenient, the controller writes its headers by hand)
+ *   MYIO_MODBUS_DISCOVERY "1" = also offer the Modbus bus discovery and the template collection (myio_modbus_discover,
+ *                         myio_modbus_templates, myio_reference topic=modbus; controller 4.29+). Off by default.
+ *   MYIO_MODBUS_CDN       the template collection (default https://okoslak.hu/ext2/modbus/; "off" = the bundled snapshot only)
  */
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { parseToolsets } from './toolsets.js';
@@ -34,7 +37,8 @@ async function main() {
   const write = parseWriteLevel(process.env.MYIO_WRITE);
   const ts = parseToolsets(process.env.MYIO_TOOLSETS);
   for (const w of ts.warnings) console.error(`MYIO_TOOLSETS: ${w}`);
-  const make = () => buildServer(reg, write, ts.enabled);
+  const modbusDiscovery = process.env.MYIO_MODBUS_DISCOVERY === '1';
+  const make = () => buildServer(reg, write, ts.enabled, { modbusDiscovery });
   console.error(`myIO MCP Server ${VERSION} starting: ${reg.clients.map((c, i) => `${c.name} -> ${c.origin} (myio://${reg.slugs[i]}/)`).join(', ')} (write level: ${write}; toolsets: ${[...ts.enabled].join(',')})`);
   const httpPort = process.env.MYIO_HTTP_PORT;
   if (httpPort !== undefined && httpPort.trim() !== '') {

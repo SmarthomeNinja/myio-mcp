@@ -47,7 +47,7 @@ export function loadSample() {
     inputName: {}, protection: Array.from({ length: PQ }, () => [0, 0]), priority: Array(PQ).fill(0), joiner: Array.from({ length: JQ }, () => [0, 0]), joinerJustOn: Array(JQ).fill(0),
     group: Array.from({ length: GQ }, () => Array(GS).fill(0)), pullUp: Array(GQ).fill(0),
     slotExist: Array(100).fill(0), slotName: {}, timers: [],   // {id, month, day, hour, minute, days, event, param, sunrise, sunset}
-    userExist: Array(16).fill(0), userName: {}, userRights: Array(16).fill(0), userPw: {}, perm: {},   // perm[slot] = {rR:[],rW:[],sH:[],sP:[]} (1/0 tombok)
+    userExist: Array(16).fill(0), userName: {}, userRights: Array(16).fill(0), userPw: {}, perm: {},   // perm[slot] = {rR:[],rW:[],sH:[],sP:[],pR:[],pW:[]} (1/0 tombok)
   };
   raw.cfg.relay[0].timer = 120; raw.cfg.input[0] = { enabled: 1, nc: 0, hitBlock: 0, hit: 1, press: 2, release: 2 }; raw.cfg.input[1].hit = 4;
   raw.cfg.inputName = { 1: 'Nappali gomb', 2: 'Konyha gomb' };
@@ -57,7 +57,7 @@ export function loadSample() {
   raw.cfg.slotExist[0] = 1; raw.cfg.slotExist[1] = 1; raw.cfg.slotName = { 0: 'alap', 1: 'Backup' };
   raw.cfg.timers = [{ id: 0, month: 80, day: 80, hour: 19, minute: 0, days: 0, event: 2, param: 46, sunrise: 0, sunset: 0 }, { id: 1, month: 80, day: 80, hour: 0, minute: 30, days: 0, event: 3, param: 46, sunrise: 0, sunset: 1 }];
   raw.cfg.userExist[0] = 1; raw.cfg.userExist[1] = 1; raw.cfg.userName = { 0: 'admin', 1: 'editor' }; raw.cfg.userRights[1] = 1;
-  raw.cfg.perm = { 0: { rR: Array(RQ).fill(1), rW: Array(RQ).fill(1), sH: Array(SQ).fill(1), sP: Array(SQ).fill(1) }, 1: { rR: Array(RQ).fill(1), rW: Array(RQ).fill(0), sH: Array(SQ).fill(0), sP: Array(SQ).fill(0) } };
+  raw.cfg.perm = { 0: { rR: Array(RQ).fill(1), rW: Array(RQ).fill(1), sH: Array(SQ).fill(1), sP: Array(SQ).fill(1), pR: Array(PCAQ).fill(1), pW: Array(PCAQ).fill(1) }, 1: { rR: Array(RQ).fill(1), rW: Array(RQ).fill(0), sH: Array(SQ).fill(0), sP: Array(SQ).fill(0), pR: Array(PCAQ).fill(1), pW: Array(PCAQ).fill(0) } };
   return raw;
 }
 
@@ -78,6 +78,12 @@ export function startMock(opts = {}) {
   const cfg = state.cfg;
   const log = [];
   let requests = 0, permissionsUser = 0;
+  const posts = [];   // a POST /info.json torzsek hossza (bajt) - a darabolas tesztjehez
+  // [4.27] bemenet-esemenyek gyuruje (inev.json) + 1-Wire ujrakereses (ow_scan=1): a gombszimulacio is esemenyt ad, mint a vason
+  const inevOk = !v3 && verGe(version, '4.27.0');
+  const inev = { seq: 0, ring: [] };
+  const pushInev = (id, e) => { inev.seq++; inev.ring.push({ n: inev.seq, id, e, at: Date.now() }); if (inev.ring.length > 16) inev.ring.shift(); };
+  const rescanAdds = [], rescanDrops = [];   // teszt-horog: az ow_scan=1 utan megjeleno / eltuno szenzorok
 
   const byId = (sec, id) => Object.values(state[sec] ?? {}).find(x => x.id === id);
   const members = g => Object.keys(g).filter(k => /^element\d+$/.test(k)).map(k => g[k]).filter(Boolean);
@@ -126,9 +132,15 @@ export function startMock(opts = {}) {
       case 'PCA_temp_MIN': { const p = pcaOf(i); if (p) p.sensorON = v; return; }
       case 'PCA_temp_MAX': { const p = pcaOf(i); if (p) p.sensorOFF = v; return; }
       case 'PCA_thermoActivator': { const p = pcaOf(i); if (p) p.sensor = v; return; }
-      case 's_hit': { const r = byId('relays', v); if (r) r.state = r.state ? 0 : 1; return; }
-      case 's_press': { const r = byId('relays', v); if (r) r.state = 1; return; }
-      case 's_release': return;
+      case 's_hit': { pushInev(v, 'H'); const r = byId('relays', v); if (r) r.state = r.state ? 0 : 1; return; }
+      case 's_press': { pushInev(v, 'P'); const r = byId('relays', v); if (r) r.state = 1; return; }
+      case 's_release': pushInev(v, 'R'); return;
+      case 'ow_scan': {
+        if (!inevOk || v !== 1) return;
+        for (const sn of rescanAdds.splice(0)) state.sensors[String(sn.id)] = sn;
+        for (const id of rescanDrops.splice(0)) for (const [k, sn] of Object.entries(state.sensors)) if (sn.id === id) delete state.sensors[k];
+        return;
+      }
       case 'usens': { if (v3) return; const u = state.usens[i]; if (u && u.en) { u.val = v; u.state = 1; u.age = 0; } return; }
       // nevek
       case 'r_descr': { const r = byId('relays', i); if (r) r.description = String(value); return; }
@@ -205,7 +217,7 @@ export function startMock(opts = {}) {
       }
       case 'del_timerSlot': cfg.timers = cfg.timers.filter(t => t.id !== v); return;
       // userek + jogok
-      case 'new_userSlot': { const k = cfg.userExist.indexOf(0); if (k >= 0) { cfg.userExist[k] = 1; cfg.userRights[k] = 0; cfg.perm[k] = { rR: Array(RQ).fill(0), rW: Array(RQ).fill(0), sH: Array(SQ).fill(0), sP: Array(SQ).fill(0) }; } return; }
+      case 'new_userSlot': { const k = cfg.userExist.indexOf(0); if (k >= 0) { cfg.userExist[k] = 1; cfg.userRights[k] = 0; cfg.perm[k] = { rR: Array(RQ).fill(0), rW: Array(RQ).fill(0), sH: Array(SQ).fill(0), sP: Array(SQ).fill(0), pR: Array(PCAQ).fill(0), pW: Array(PCAQ).fill(0) }; } return; }
       case 'del_userSlot': { if (v > 0 && v < 16) { cfg.userExist[v] = 0; delete cfg.userName[v]; } return; }
       case 'pwd': cfg.userPw[i] = String(value); return;
       case 'rights': { if (i > 0) cfg.userRights[i] = value === 'admin' ? 0 : value === 'editor' ? 1 : 2; return; }
@@ -216,6 +228,8 @@ export function startMock(opts = {}) {
       case 'rWritePermission': { const p = cfg.perm[permissionsUser]; if (p) toggle(p.rW, v - 1); return; }
       case 'swHitPermission': { const p = cfg.perm[permissionsUser]; if (p) toggle(p.sH, v - 1); return; }
       case 'swPressPermission': { const p = cfg.perm[permissionsUser]; if (p) toggle(p.sP, v - 1); return; }
+      case 'pReadPermission': { const p = cfg.perm[permissionsUser]; if (p) toggle(p.pR, v - 1); return; }
+      case 'pWritePermission': { const p = cfg.perm[permissionsUser]; if (p) toggle(p.pW, v - 1); return; }
       default: return;
     }
   }
@@ -336,7 +350,9 @@ var editor=[${cfg.userExist.map((e, i) => (e && cfg.userRights[i] === 1 ? 1 : 0)
 var user=[${cfg.userExist.map((e, i) => (e && cfg.userRights[i] === 2 ? 1 : 0))}];
 </script></head><body>users</body></html>`;
   const timerCsv = () => { const t = cfg.timers; if (!t.length) return null; return ['id', 'month', 'day', 'hour', 'minute', 'days', 'event', 'param', 'sunrise', 'sunset'].map(k => t.map(x => x[k]).join(',')).join('\n') + '\n'; };
-  const permJs = () => { const p = cfg.perm[permissionsUser]; if (!p) return ''; return `// userpermissions\nvar permissionsUser= ${permissionsUser};\nvar relayReadPermission=[${p.rR}];\nvar relayWritePermission=[${p.rW}];\nvar switchHitPermission=[${p.sH}];\nvar switchPressPermission=[${p.sP}];\n${descLines('userName', 10, cfg.userName)}\n`; };
+  const permJs = () => { const p = cfg.perm[permissionsUser]; if (!p) return ''; return `// userpermissions\nvar permissionsUser= ${permissionsUser};\nvar relayReadPermission=[${p.rR}];\nvar relayWritePermission=[${p.rW}];\nvar switchHitPermission=[${p.sH}];\nvar switchPressPermission=[${p.sP}];\nvar pcaReadPermission=[${p.pR}];\nvar pcaWritePermission=[${p.pW}];\n${descLines('userName', 10, cfg.userName)}\n`; };
+  // Due: a reqUserpermissions.js ures (3.12.29 ota), a /userpermissions oldal adja ugyanezt a Setup()-var-blokkban (MYIOname is benne)
+  const permPage = () => `<!DOCTYPE html><html><head><title>myIO-${cfg.MYIOname} - Permissions</title><script>\nvar MYIOname='${cfg.MYIOname}';\n${permJs()}</script></head><body>permissions</body></html>`;
 
   // ---- 3. kor: fajlrendszer (q = belso flash, s = SD), Flow, Script, sysdiag, metrics, fm_* (a fw viselkedese szerint) ----
   const today = new Date();
@@ -371,7 +387,11 @@ var user=[${cfg.userExist.map((e, i) => (e && cfg.userRights[i] === 2 ? 1 : 0))}
   // Flow
   let flowsText = opts.flows ? JSON.stringify(opts.flows) : null;
   const flow = { loaded: [], en: new Map(), vars: Array(32).fill(0), trace: [], tseq: 0, err: 0, errflow: -1, fired: 0, hooks: new Map() };
-  const ftr = (id, ev, card, val) => { flow.tseq++; flow.trace.unshift([Date.now() % 1e9, id, ev, card, val]); flow.trace = flow.trace.slice(0, 256); };
+  // trace-gyuru, mint a vason (_Flow.ino / _Prog.ino): IDORENDBEN (a legregebbi elol), a valaszban az elso elem az esemeny KORA ms-ban
+  // (fw: `_now - e.ms`), a ?since=<tseq> a sorszam szerinti ujabbakat adja
+  const trPush = (ring, cap, row) => { ring.push([Date.now(), ...row]); if (ring.length > cap) ring.shift(); };
+  const trOut = (ring, tseq, since) => { const now = Date.now(); return ring.slice(Math.max(0, since - (tseq - ring.length))).map(([t, ...r]) => [now - t, ...r]); };
+  const ftr = (id, ev, card, val) => { flow.tseq++; trPush(flow.trace, 256, [id, ev, card, val]); };
   const flowReload = () => {
     flow.loaded = []; flow.en.clear(); flow.err = 0; flow.errflow = -1; flow.hooks.clear();
     if (!flowsText) return;
@@ -390,7 +410,7 @@ var user=[${cfg.userExist.map((e, i) => (e && cfg.userRights[i] === 2 ? 1 : 0))}
   // Script
   const prog = Array.from({ length: 8 }, (_, k) => ({ id: k + 1, st: 0 }));
   let ptseq = 0; const ptrace = [];
-  const ptr = (id, ev, a, val) => { ptseq++; ptrace.unshift([Date.now() % 1e9, id, ev, a, val]); };
+  const ptr = (id, ev, a, val) => { ptseq++; trPush(ptrace, 128, [id, ev, a, val]); };
   const progCompile = n => {
     const b = fs3.q.files.get(`/prog/${n}.txt`); const slot = prog[n - 1];
     if (!b) { prog[n - 1] = { id: n, st: 0 }; return; }
@@ -436,8 +456,8 @@ var user=[${cfg.userExist.map((e, i) => (e && cfg.userRights[i] === 2 ? 1 : 0))}
       send(200, 'text/plain', `OK ${buf.length}\r\n`); return true;
     }
     if (p === '/flows.jsn' && !v3) { if (flowsText === null) send(404, 'text/plain', '404'); else send(200, 'application/json', flowsText); return true; }
-    if (p === '/flowtrace.json') { if (v3) return false; const since = Number(qs.get('since') ?? 0); json({ up: 1234, n: flow.loaded.length, max: 64, err: flow.err, errflow: flow.errflow, tickmax: 12, overrun: 0, fired: flow.fired, evdrop: 0, vars: flow.vars, flows: flow.loaded.map(f => [f.id, (flow.en.get(f.id) ? 1 : 0) | 2, 0, 0, 0]), tseq: flow.tseq, trace: since ? flow.trace.slice(0, Math.max(0, flow.tseq - since)) : flow.trace }); return true; }
-    if (p === '/prog.json') { if (v3 || version < '4.10') return false; const since = Number(qs.get('since') ?? 0); json({ up: 1234, max: 8, srcmax: 4096, everymin: 100, tickmax: 300, runmax: 120, err: 0, reload: 0, progs: prog, n: prog.filter(x => x.st).length, gvars: flow.vars, tseq: ptseq, trace: since ? ptrace.slice(0, Math.max(0, ptseq - since)) : ptrace }); return true; }
+    if (p === '/flowtrace.json') { if (v3) return false; const since = Number(qs.get('since') ?? 0); json({ up: 1234, n: flow.loaded.length, max: 64, err: flow.err, errflow: flow.errflow, tickmax: 12, overrun: 0, fired: flow.fired, evdrop: 0, vars: flow.vars, flows: flow.loaded.map(f => [f.id, (flow.en.get(f.id) ? 1 : 0) | 2, 0, 0, 0]), tseq: flow.tseq, trace: trOut(flow.trace, flow.tseq, since) }); return true; }
+    if (p === '/prog.json') { if (v3 || version < '4.10') return false; const since = Number(qs.get('since') ?? 0); json({ up: 1234, max: 8, srcmax: 4096, everymin: 100, tickmax: 300, runmax: 120, err: 0, reload: 0, progs: prog, n: prog.filter(x => x.st).length, gvars: flow.vars, tseq: ptseq, trace: trOut(ptrace, ptseq, since) }); return true; }
     if (p === '/sysdiag.json') { json(JSON.parse(sysdiag())); return true; }
     if (p === '/metrics') { if (v3) return false; send(200, 'text/plain', metrics()); return true; }
     if (p === '/fm.json') { const V = qs.get('vol') === 's' || v3 ? fs3.s : fs3.q; json(r3list(V, qs.get('dir') || '/', V === fs3.s ? sdCard : true)); return true; }
@@ -465,6 +485,8 @@ var user=[${cfg.userExist.map((e, i) => (e && cfg.userRights[i] === 2 ? 1 : 0))}
       else if (p.startsWith('/~sd/')) b = sdCard ? fs3.s.files.get(p.slice(4)) : undefined;
       else b = (v3 ? undefined : fs3.q.files.get(p)) ?? (sdCard ? fs3.s.files.get(p) : undefined);
       if (b) { res.writeHead(200, { 'Content-Type': 'application/octet-stream', Connection: 'close' }); res.end(b); return true; }
+      // Due 3.12.44 elott: a csupasz statikus ut nem letezo fajlra egy bajtot sem kuld, csak bont ("socket hang up")
+      if (v3 && !verGe(version, '3.12.44') && /^\/(ev_log|c_log|sdm_log|[thu]_log_\d+)\//.test(p)) { req.socket.destroy(); return true; }
     }
     return false;
   }
@@ -480,7 +502,14 @@ var user=[${cfg.userExist.map((e, i) => (e && cfg.userRights[i] === 2 ? 1 : 0))}
     shelly: { en: 0, token: 'TOKEN123', dev: { 0: { ip: '192.168.1.133', gen: 2, id: 'shelly1', model: 'S1', dis: 0, slp: 0, poll: 1000, authen: 0, online: 1, push: 0, state: 1, valid: 1, description: 'Lamp', drv: [0, 0, 0, 0], insw: [0, 0, 0, 0], inmode: [0, 0, 0, 0], senm: [0, 0, 0, 0], senc: [0, 0, 0, 0], seni: [0, 0, 0, 0] } } },
     knx: { off: opts.knxOffline ? 1 : 0, ga: Array(48).fill(0), dir: Array(48).fill(0), dpt: Array(48).fill(0), loc: Array(48).fill(0), fl: Array(48).fill(0), tgt: Array(48).fill(0), nm: Array(48).fill(''), sh: null, ipEn: 1, saved: 0 },
     dali: { ep: [{ i: 0, p: 1, e: 0, pca: 2, pv: 0, pwm: 1, fd: 2, fr: 7, po: 0, sf: 255, mn: 5, mx: 254, cv: 0, g: 1, gr: 1, dt: 6, pm: 5, f: 3, r: [2, 7, 0, 255, 5, 254, 0], ls: 255, act: 255 }] },
-    mb: { cfg: [1, 0, 25, 1, 10, 1, 0, 0] },
+    // Modbus: allapotos tabla (mb_blk / mb_fld / mb_wr / nevek / eszkoz-rekordok) + busz-felderites [4.29]: a futast az mbscan.json
+    // LEKERDEZESEI leptetik (determinisztikus): 1. hallgat, 2. pasztaz, 3. uj eszkoz (meg fut), 4. kesz + reszletek; mely modban +2 kor
+    mb: { cfg: [1, 0, 25, 1, 10, 1, 0, 0],
+      blk: [[1, 4, 0, 0, 2, 5, 1, 0], ...Array.from({ length: 7 }, () => [0, 0, 0, 0, 0, 0, 0, 0])],
+      fld: [[0, 0, 5, 0, 0, 255, 12, 1], ...Array.from({ length: 31 }, () => [255, 0, 0, 0, 0, 0, 0, 0])],
+      wr: Array.from({ length: 16 }, () => Array(12).fill(0)), val: [[230.4, 1, 3], ...Array.from({ length: 31 }, () => [0, 0, 255])],
+      fn: ['L1 feszültség', ...Array(31).fill('')], wn: Array(16).fill(''), dev: [],
+      disc: { on: opts.mbOffline ? 0 : 1, cap: opts.mbOldPanel ? 0 : 1, est: 0, estm: 0, note: '', probes: [], run: null, polls: 0, id: 0, devs: [], detail: 0, found: opts.mbFound === undefined ? { addr: 5, baud: 2400, frame: '8E1', pol: 0, id: ['', '', ''], pr: [] } : opts.mbFound, busy: !!opts.mbBusy } },
     up: 1234,
   };
   r4.knx.ga[0] = (1 << 11) | (2 << 8) | 3; r4.knx.dir[0] = 2; r4.knx.dpt[0] = 1; r4.knx.loc[0] = 4; r4.knx.nm[0] = 'Nappali lámpa';
@@ -566,7 +595,26 @@ var user=[${cfg.userExist.map((e, i) => (e && cfg.userRights[i] === 2 ? 1 : 0))}
     }
     if (name.startsWith('mb_')) {
       if (v3) return true;
-      if (name === 'mb_cfg') { const parts = key.split('*').slice(2).map(Number); r4.mb.cfg = [...parts, v, 0, 0]; }
+      const B = r4.mb, D = B.disc, q = key.split('*').map(Number), lo = x => x & 255, hi = x => (x >> 8) & 255;
+      if (name === 'mb_cfg') { const parts = key.split('*').slice(2).map(Number); B.cfg = [...parts, v, 0, 0]; }
+      else if (!D.on) return true;                                   // offline panel: a parancsot csendben eldobja
+      else if (name === 'mb_blk' && q[2] < B.blk.length) B.blk[q[2]] = [q[3], q[4], lo(q[5]), hi(q[5]), q[6], q[7], v, 0];
+      else if (name === 'mb_fld' && q[2] < B.fld.length) { B.fld[q[2]] = [q[3], q[4], q[5], q[6], q[7] & 255, q[8], q[9], v]; B.val[q[2]] = [0, 0, 255]; }
+      else if (name === 'mb_wr' && q[2] < B.wr.length) B.wr[q[2]] = [q[3], q[4], lo(q[5]), hi(q[5]), q[6], q[7], lo(q[8]), hi(q[8]), lo(q[9]), hi(q[9]), q[10], v];
+      else if (/^mb_n\d+_\d+$/.test(name)) B.fn[Number(name.split('_')[2])] = value;
+      else if (/^mb_w\d+_\d+$/.test(name)) B.wn[Number(name.split('_')[2])] = value;
+      else if (/^mb_d[nt]\d+_\d+$/.test(name)) {
+        const a = Number(name.split('_')[2]); let r = B.dev.find(x => x.a === a); if (!r) { r = { a, n: '', t: '' }; B.dev.push(r); }
+        r[name[4] === 'n' ? 'n' : 't'] = value;
+      }
+      else if (/^mb_dcn\d+$/.test(name)) D.note = value;
+      else if (name === 'mb_dprobe') { if (!(D.run && D.run.st === 1)) D.probes[q[2]] = { fc: q[3], reg: q[4], n: v }; }
+      else if (name === 'mb_dstop') { if (D.run && D.run.st === 1) { D.run.st = 3; D.detail = 1; } }
+      else if (name === 'mb_disc') {
+        const mode = q[2] & 127;
+        D.est = mode ? 2185 : 70; D.estm = mode;
+        if (!(q[2] & 128) && !D.busy && D.cap && !(D.run && D.run.st === 1)) { D.id++; D.polls = 0; D.devs = []; D.detail = 0; D.run = { st: 1, ph: 1, pct: 0, el: 0, tot: D.est, mode, opts: q[5], id: D.id, addr: 0, baud: MB_BAUD[B.cfg[0]], frame: MB_FRAME[B.cfg[1]], pol: 0 }; }
+      }
       return true;
     }
     if (name === 'Restart') { r4.up = 3; return true; }
@@ -583,9 +631,13 @@ var user=[${cfg.userExist.map((e, i) => (e && cfg.userRights[i] === 2 ? 1 : 0))}
   }
   const vline = (k, val) => `var ${k}=${typeof val === 'string' ? `'${val.replace(/'/g, "\\'")}'` : JSON.stringify(val).replace(/"/g, "'")};`;
   const page = (vars) => `<!DOCTYPE HTML><html><head><script>\n${Object.entries(vars).map(([k, val]) => vline(k, val)).join('\n')}\n</script></head><body></body></html>`;
+  const vGe = (a, b) => { const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number); for (let k = 0; k < 3; k++) { if ((x[k] || 0) !== (y[k] || 0)) return (x[k] || 0) > (y[k] || 0); } return true; };
+  const MB_BAUD = [9600, 19200, 38400, 57600, 115200, 4800, 2400, 1200], MB_FRAME = ['8N1', '8E1', '8O1', '8N2'];
   function r4route(url, send) {
     const p = url.split('?')[0];
     const json = o => send(200, 'application/json', JSON.stringify(o));
+    // a Modbus sablon-gyujtemeny (CDN) helyben: opts.cdn = { 'index.json': {...}, '<id>.json': {...} } (MYIO_MODBUS_CDN=<url>/__cdn/modbus/)
+    if (p.startsWith('/__cdn/modbus/')) { const f = opts.cdn?.[p.slice(14)]; if (f) json(f); else send(404, 'text/plain', '404'); return true; }
     const M = r4.mqtt;
     if (p === '/mqtt') { if (v3 && version < '3.12.31') return false; send(200, 'text/html', page({ mq_en: M.en, mq_host: M.host, mq_port: M.port, mq_user: M.user, mq_pw: M.pw, mq_cid: M.cid, mq_base: M.base, mq_ret: M.ret, mq_qos: M.qos, mq_ha: M.ha, ...(v3 ? {} : { mq_eco: M.eco, mq_tls: M.tls, mq_tkey: M.tkey }), mq_chg: M.chg, mq_per: M.per, mq_pers: M.pers, mq_sub: M.sub, mq_cmd: M.cmd, mq_cslot: M.cslot, mq_dirty: M.dirty, mq_host_eff: 'mock', mq_state: M.state, mq_drop: 0, mq_cmdrx: 0, mq_subden: 0, mq_senrx: 0, ...(v3 ? {} : { mq_senq: 8, mqs_t: M.mqs_t, mqs_k: M.mqs_k, mqs_i: M.mqs_i }), mq_bip: '0.0.0.0' })); return true; }
     if (p === '/sg') { const G = r4.sg; send(200, 'text/html', page({ sg_en: G.en, sg_k1: G.k1, sg_k2: G.k2, sg_lim: G.lim, sg_mode: G.mode, sg_rem: 0, sg_prot: 0 })); return true; }
@@ -605,7 +657,32 @@ var user=[${cfg.userExist.map((e, i) => (e && cfg.userRights[i] === 2 ? 1 : 0))}
     if (p === '/expander') { send(200, 'text/html', page({ exp_q: 10, exp_on: 2, exp_t: [0, 1, 0, 0, 0, 0, 0, 0, 0, 0], exs_t: [16, 17, 0, 0, 0, 0, 0, 0, 0, 0], exs_fj: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], exs_fn: [12, 2, 0, 0, 0, 0, 0, 0, 0, 0], exs_pv: [5, 1, 0, 0, 0, 0, 0, 0, 0, 0], exs_n: [3, 4, 0, 0, 0, 0, 0, 0, 0, 0], exs_ls: [1000, 1500, 0, 0, 0, 0, 0, 0, 0, 0], exs_now: 2000, exf_fs: Array(10).fill(3), exf_to: Array(10).fill(5), exf_ma: Array(10).fill(0), exf_rl: Array(10).fill(0), exf_rt: Array(10).fill(0), exf_as: Array(10).fill(1), exf_ts: Array(10).fill(1), exf_tp: Array(10).fill(1200), exa_m: Array(20).fill(0), ow_rom: ['28AA'], ow_seen: [3], ow_val: [2150], ow_age: [4] })); return true; }
     if (p === '/dali.json') { json({ dali: { epq: 81, n: r4.dali.ep.length, pool: [1, 16], busy: 0, msg: '', panels: [{ a: 1, on: 1 }], ep: r4.dali.ep } }); return true; }
     if (p === '/dmx.json') { json({ dmx: { fxq: 64, n: 0, pool: [1, 160], test: -1, msg: '', panels: [], fx: [] } }); return true; }
-    if (p === '/modbus.json') { json({ modbus: { usmin: 9, senq: 100, msg: '', panels: [{ a: 2, on: 1, ld: 1, pend: 0, name: 'SDM', preset: '', cfg: r4.mb.cfg, blk: [[1, 4, 0, 0, 2, 5, 1, 0], ...Array(7).fill([0, 0, 0, 0, 0, 0, 0, 0])], fld: [[0, 0, 5, 0, 0, 255, 12, 1], ...Array(31).fill([255, 0, 0, 0, 0, 0, 0, 0])], wr: Array(16).fill(Array(12).fill(0)), val: [[230.4, 1, 3], ...Array(31).fill([0, 0, 255])], fn: ['L1 feszültség', ...Array(31).fill('')], wn: Array(16).fill(''), raw: null, scan: null }] } }); return true; }
+    if (p === '/modbus.json') {
+      const B = r4.mb, v2 = vGe(version, '4.19.1');
+      json({ modbus: { usmin: 9, senq: 100, msg: '', ...(v2 ? { sdm: 1 } : {}), panels: [{ a: 2, on: B.disc.on, ld: 1, pend: 0, name: 'SDM', preset: '', cfg: B.cfg, ...(v2 ? { cap: [8, 32, 16], feat: vGe(version, '4.29.0') && B.disc.cap ? 63 : 31, dev: B.dev } : {}),
+        ...(vGe(version, '4.30.0') ? { ds: [[1, 2, 47, 1795031494, 30]], rst: [3, 1] } : {}),
+        blk: B.blk, fld: B.fld, wr: B.wr, val: B.val, fn: B.fn, wn: B.wn, raw: null, scan: null }] } });
+      return true;
+    }
+    if (p === '/mbscan.json') {
+      if (!vGe(version, '4.29.0')) return false;
+      const D = r4.mb.disc, R = D.run;
+      if (R && R.st === 1) {                      // a futas leptetese lekerdezesenkent
+        D.polls++;
+        const deep = R.mode ? 2 : 0, f = D.found;
+        if (D.polls === 1) { R.ph = 1; R.pct = 2; R.el = 2; }
+        else if (D.polls < 3 + deep) { R.ph = 3; R.pct = 40; R.el = 30; R.addr = 77; R.baud = 2400; R.frame = '8E1'; }
+        else if (D.polls === 3 + deep) { R.ph = 3; R.pct = 70; R.el = 50; if (f) D.devs.push({ addr: f.addr, baud: f.baud, frame: f.frame, pol: f.pol, fl: 5, new: 1, known: 0, ans: 1, garbled: 0, slow: 0, stuck: 0, fp: [3, 3, 1, 1], delay: 8, ok: 3, bad: 0, exc: 0, idm: 0, id: ['', '', ''], sid: '', pr: [] }); }
+        else { R.st = 2; R.ph = 5; R.pct = 100; R.el = R.tot; D.detail = 1; for (const d of D.devs) if (d.new && f) { d.id = f.id; d.pr = f.pr; } }
+      }
+      const known = { addr: 1, baud: MB_BAUD[r4.mb.cfg[0]], frame: MB_FRAME[r4.mb.cfg[1]], pol: 0, fl: 6, new: 0, known: 1, ans: 1, garbled: 0, slow: 0, stuck: 0, fp: [0, 0, 0, 1], delay: 8, ok: 3, bad: 0, exc: 0, idm: 0, id: ['', '', ''], sid: '', pr: [] };
+      const devs = R ? [known, ...D.devs] : [];
+      const nnew = D.devs.length, done = R && R.st >= 2, other = done && D.devs.some(d => d.baud !== known.baud || d.frame !== known.frame);
+      const flags = !done ? [] : nnew ? (other ? ['OTHER_COMBO'] : []) : ['NO_NEW'];
+      json({ mbscan: { panels: [{ a: 2, on: D.on, cap: D.cap, est: D.est, estm: D.estm, note: D.note, run: R, ...(R ? { bus: { baud: known.baud, frame: known.frame, pol: 0 }, ndev: devs.length, nnew, fl: 0, flags,
+        hints: !done ? [] : nnew ? (other ? ['H7'] : []) : (R.st === 2 ? ['H1'] : []), sniff: null, detail: done ? 1 : 0, dev: devs, stat: [], probes: D.probes.map((q, i) => q && q.fc ? { i, fc: q.fc, n: q.n, reg: q.reg } : null).filter(Boolean) } : {}) }] } });
+      return true;
+    }
     return false;
   }
 
@@ -621,18 +698,31 @@ var user=[${cfg.userExist.map((e, i) => (e && cfg.userRights[i] === 2 ? 1 : 0))}
     req.on('data', c => body += c);
     req.on('end', () => {
       const url = req.url ?? '/';
-      if (req.method === 'POST' && (url === '/info.json' || url === '/')) { execAll(Buffer.from(body, 'latin1').toString('utf8')); send(200, 'application/json', infoJson()); return; }
+      if (req.method === 'POST' && (url === '/info.json' || url === '/')) {
+        posts.push(body.length);
+        // Due RSL=256: 3.12.45-ig a 255 B feletti resz NEMAN levagodik (a csonka torzs lefut), 3.12.46-tol 413; 4.x RSL=1024: a >= 1024 B torzs egeszben eldobva (200)
+        if (v3 && body.length >= 256) { if (verGe(version, '3.12.46')) { send(413, 'text/plain', '413 POST body over 255 bytes - nothing executed'); return; } body = body.slice(0, 255); }
+        if (!v3 && body.length >= 1024) { send(200, 'application/json', infoJson()); return; }
+        execAll(Buffer.from(body, 'latin1').toString('utf8')); send(200, 'application/json', infoJson()); return;
+      }
       if (url.startsWith('/command:')) { execAll(url.slice(9)); send(200, 'text/html', '<!DOCTYPE HTML><html><body>command</body></html>'); return; }
       if (url === '/info.json') { send(200, 'application/json', infoJson()); return; }
       if (url === '/sens_out.json') { send(200, 'application/json', snapshot(false, false)); return; }
       if (url === '/d_sens_out.json') { send(200, 'application/json', snapshot(true, false)); return; }
       if (url === '/sens_IO.json') { send(200, 'application/json', snapshot(false, true)); return; }
       if (url === '/d_sens_IO.json') { send(200, 'application/json', snapshot(true, true)); return; }
+      if (url === '/inev.json' || url.startsWith('/inev.json?')) {
+        if (!inevOk) { send(404, 'text/plain', '404'); return; }
+        const since = Number(new URL(url, 'http://x').searchParams.get('since') ?? 0);
+        send(200, 'application/json', JSON.stringify({ inev: { seq: inev.seq, n: 16, ev: inev.ring.filter(e => e.n > since).map(e => ({ n: e.n, id: e.id, e: e.e, age: Date.now() - e.at })) } }));
+        return;
+      }
       if (url === '/usensor.json') { if (v3) send(404, 'text/plain', '404'); else send(200, 'application/json', usensJson()); return; }
       if (url === '/setup') { send(200, 'text/html', setupPage()); return; }
       if (url === '/users') { send(200, 'text/html', usersPage()); return; }
       if (url === '/timer.csv') { const c = timerCsv(); if (c === null) send(404, 'text/plain', '404'); else send(200, 'text/csv', c); return; }
       if (url === '/reqUserpermissions.js') { res.socket.write(v3 ? '' : permJs()); res.socket.end(); return; }   // FEJLEC NELKUL, mint a vas
+      if (url === '/userpermissions') { send(200, 'text/html', permPage()); return; }
       if (url === '/__cmds') { send(200, 'application/json', JSON.stringify(log)); return; }
       if (req.method === 'GET' && r4route(url, send)) return;
       if (r3route(req, url, body, send, res)) return;
@@ -642,7 +732,19 @@ var user=[${cfg.userExist.map((e, i) => (e && cfg.userRights[i] === 2 ? 1 : 0))}
   return new Promise(resolve => {
     server.listen(opts.port ?? 0, '127.0.0.1', () => {
       const port = server.address().port;
-      resolve({ port, url: `http://127.0.0.1:${port}`, state, cfg, log, get requests() { return requests; }, close: () => new Promise(r => server.close(r)) });
+      resolve({ port, url: `http://127.0.0.1:${port}`, state, cfg, log, posts, get requests() { return requests; }, close: () => new Promise(r => server.close(r)),
+        /** a Modbus-tabla + felderites allapota (mb.disc) es a virtualis fajlrendszer (files.q / files.s) a tesztek ellenorzeseihez */
+        mb: r4.mb, files: fs3,
+        /** [4.27] fizikai gombnyomas: esemeny a gyuruben (H rovid, P hosszu, R elengedes) */
+        pressInput: (id, e = 'H') => pushInev(id, e),
+        /** a vezerlo "ujraindul": a sorszam elolrol megy */
+        rebootInev: () => { inev.seq = 0; inev.ring.length = 0; },
+        /** a kovetkezo ow_scan=1 utan megjeleno homero */
+        addOnRescan: sn => rescanAdds.push(sn),
+        /** a kovetkezo ow_scan=1 utan eltuno homero (kihuzott szenzor) */
+        dropOnRescan: id => rescanDrops.push(id),
+        /** "telik az ido": a Flow- es Script-trace eddigi bejegyzesei ms-mal regebbiek lesznek */
+        ageTrace: ms => { for (const e of [...flow.trace, ...ptrace]) e[0] -= ms; } });
     });
   });
 }

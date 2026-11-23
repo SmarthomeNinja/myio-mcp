@@ -7,3 +7,5 @@ test/
 .vscode
 scripts/
 claude-plugin/
+cursor-plugin/
+.cursor-plugin/

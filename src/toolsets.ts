@@ -14,7 +14,7 @@ export type Toolset = (typeof TOOLSETS)[number];
 export const TOOLSET_INFO: Record<Toolset, string> = {
   core: 'controllers, info, find by name, outputs list/switch, sensors, raw JSON, raw command (always on)',
   legacy: 'the per-type switches from 2026-02 (relay/pca/pwm/group on|off|toggle|set) - myio_output covers them',
-  house: 'inputs + button simulation, thermostats, shutters, RGB, universal sensors',
+  house: 'inputs + button simulation, thermostats, shutters, RGB, universal sensors, setup helpers (wait for a button press / a warmed sensor, 1-Wire rescan)',
   config: 'settings, names, output/input configuration, structures, scenes, timers, users, permissions',
   automation: 'Flow rules, scripts, the language/API reference',
   diag: 'sysdiag, metrics, logs, files, SD mirror',

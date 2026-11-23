@@ -33,7 +33,7 @@ after(async () => { await client.close(); await m4.close(); await m3.close(); aw
 
 test('roster: 102 tools; read tools are read-only, admin tools destructive', async () => {
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 102);
+  assert.equal(tools.length, 105);
   for (const n of ['myio_shelly', 'myio_link', 'myio_mqtt', 'myio_cloud', 'myio_sgready', 'myio_alarm', 'myio_mia', 'myio_ledstrip', 'myio_network', 'myio_expanders', 'myio_knx', 'myio_dali', 'myio_dmx', 'myio_modbus'])
     assert.equal(tools.find(t => t.name === n).annotations.readOnlyHint, true, n);
   for (const n of ['myio_network_set', 'myio_system', 'myio_cloud_set']) assert.equal(tools.find(t => t.name === n).annotations.destructiveHint, true, n);
@@ -222,4 +222,14 @@ test('system on a Due: package checks, upload + install, rejected package, base 
     assert.equal(b.isError, false); assert.match(b.text, /running 3\.12\.33 \(was 3\.12\.33\)/); assert.match(b.text, /REJECTED \(renamed to MYIO_BAD\.BIN\).*The previous firmware runs/);
     assert.equal(k.isError, true); assert.match(k.text, /did not restart - MYIO_NEW\.BIN is still on the SD card: the base \(bank 0\) firmware has no device key/);
   } finally { await c.close(); await dOk.close(); await dBad.close(); await dKey.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('modbus 4.30: device lost state + panel watchdog note in myio_modbus', async () => {
+  const m = await startMock({ version: '4.30.0' });
+  const c = await connect({ MYIO_BASE_URL: m.url });
+  try {
+    const r = await callText(c, 'myio_modbus');
+    assert.match(r.text, /device 1: LOST - not answering; last answer 47 s ago; lost after 30 s without an answer \(Flow card mbdev, Script mbdev\(2, 1\)\)/);
+    assert.match(r.text, /panel restarted by its watchdog \(1x since power-on\)/);
+  } finally { await c.close(); await m.close(); }
 });

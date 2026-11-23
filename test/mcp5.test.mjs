@@ -75,6 +75,7 @@ test('resource templates: event log by date, script source, unknown controller, 
   assert.equal(log.mimeType, 'text/csv'); assert.match(log.text, /MEMORY FALLING/);
   assert.match((await read(client, 'myio://emelet/log/today')).text, /LOOP-STALL/);
   await assert.rejects(read(client, 'myio://foldszint/log/2001-01-01'), /no event log for 010101/);
+  await assert.rejects(read(client, 'myio://emelet/log/2001-01-01'), /no event log for 010101/);   // Due < 3.12.44: a csupasz ut bontana
   await assert.rejects(read(client, 'myio://foldszint/prog/2.txt'), /slot 2 is empty/);
   const r = await callText(client, 'myio_script_save', { id: 2, source: '#name proba\n#every 1s\nvar n = 0\nn = n + 1\n' });
   assert.equal(r.isError, false, r.text);
@@ -176,7 +177,7 @@ test('idempotent setters: an identical protection pair / joiner / timer is not c
 // ---- annotaciok -----------------------------------------------------------------------------------------------------------------
 test('annotations: read tools read-only; desired-value setters idempotent; toggles, fire/run and add/new not; config writes destructive', async () => {
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 102);
+  assert.equal(tools.length, 105);
   const a = n => { const t = tools.find(x => x.name === n); assert.ok(t, n); return t.annotations; };
   for (const t of tools) {
     const x = t.annotations;
@@ -207,7 +208,7 @@ test('MYIO_TOOLSETS: core always, legacy separable, prompts and instructions fol
   const c1 = await connect({ MYIO_BASE_URL: m4.url, MYIO_TOOLSETS: 'house' });
   try {
     const names = (await c1.listTools()).tools.map(t => t.name).sort();
-    assert.equal(names.length, 8 + 10);
+    assert.equal(names.length, 8 + 13);
     for (const n of ['myio_info', 'myio_servers', 'myio_find', 'myio_output', 'myio_send_command', 'myio_thermostats']) assert.ok(names.includes(n), n);
     assert.ok(!names.includes('myio_relay_on') && !names.includes('myio_flows'));
     assert.match(c1.getInstructions(), /Not loaded: legacy .*config/);
@@ -218,7 +219,7 @@ test('MYIO_TOOLSETS: core always, legacy separable, prompts and instructions fol
   const c2 = await connect({ MYIO_BASE_URL: m4.url, MYIO_TOOLSETS: 'all,-legacy,-core' });
   try {
     const names = (await c2.listTools()).tools.map(t => t.name);
-    assert.equal(names.length, 102 - 14);
+    assert.equal(names.length, 105 - 14);
     assert.ok(names.includes('myio_info'), 'core cannot be disabled'); assert.ok(!names.includes('myio_pca_set'));
   } finally { await c2.close(); }
 });
@@ -245,7 +246,7 @@ test('HTTP transport: bearer token required, sessions work, tools and resources 
     assert.equal(bad.status, 401);
     const c = new Client({ name: 'http-test', version: '0' });
     await c.connect(new StreamableHTTPClientTransport(new URL(s.url), { requestInit: { headers: { Authorization: `Bearer ${TOKEN}` } } }));
-    assert.equal((await c.listTools()).tools.length, 102);
+    assert.equal((await c.listTools()).tools.length, 105);
     const r = await c.callTool({ name: 'myio_info', arguments: {} });
     assert.match(r.content[0].text, /firmware 4\.18\.10/);
     assert.match((await c.readResource({ uri: `myio://${new URL(m4.url).host.replace(/[^a-z0-9]+/g, '-')}/state` })).contents[0].text, /"outputs"/);

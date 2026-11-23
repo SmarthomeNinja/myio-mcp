@@ -9,11 +9,12 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { MyIOClient, MyIOError } from '../api.js';
 import { FEAT, decodeDevices, decodeSensors, num } from '../model.js';
 import {
-  FlowsFile, FlowDef, FlowHook, FlowVar, FlowNamer, Issue, validateFlows, flowText, decodeFlowLive, flowTraceText,
+  FlowsFile, FlowDef, FlowHook, FlowVar, FlowNamer, Issue, validateFlows, flowText, decodeFlowLive, flowTraceText, traceNewest,
   ProgJson, progText, progTraceText, setEnabledDirective,
 } from '../model_auto.js';
 import { ToolContext, RO, WR, WR_CFG, WR_CFG_SET, text, fail, serverArg, sleep, gate, usensOrEmpty, devices } from './common.js';
 import { apiReference, scriptReference, flowReference, searchHeadings, headingList } from '../docs.js';
+import { GUIDE as MODBUS_GUIDE } from '../model_modbus.js';
 
 export interface FlowTrace { up?: number; n?: number; max?: number; err?: number; errflow?: number; fired?: number; evdrop?: number; tickmax?: number; overrun?: number; vars?: number[]; flows?: unknown[]; tseq?: number; trace?: unknown[][]; }
 
@@ -46,6 +47,7 @@ export async function flowNamer(c: MyIOClient, file: FlowsFile): Promise<{ namer
       usens: id => `usens #${id}${q(us.find(u => u.id === id)?.name)}`,
       variable: id => `var${id}${q(vars.get(id))}`,
       hook: id => `#${id}${q(hooks.get(id))}`,
+      mbdev: (p, a) => `Modbus device ${a} on panel ${p}`,
     },
   };
 }
@@ -110,8 +112,8 @@ export function registerAutomationTools(server: McpServer, ctx: ToolContext): vo
     description: 'Edit flows.jsn and reload the engine (no restart). Give ONE of: flow (a whole rule object; replaces the rule with the same id or adds it), '
       + 'delete (flow id), variable {id,name,init} / delete_variable, hook {id,name,met,url,body,err,gap} / delete_hook, or file (the complete flows.jsn). '
       + 'The rule is validated against the controller\'s card rules first; nothing is written on error. dry_run=true only validates. '
-      + 'Card format (keys are short): WHEN t=sens{src:thermo|hum|usens, ch|id, op:gt|lt, val x10, hyst x10} | scmp | out{id, dir 0 off/1 on/2 any} | time{min, days} | sun{ev:rise|set, off} | var{id, op, val} | boot; '
-      + 'AND t=sens | scmp | out{id, on 0|1} | twin{from, to, days} | var; THEN t=rel|grp{id, act 0 off/1 on/2 toggle} | pca|fet{id, val 0..255} | delay{s|m} | var{id, op:set|inc|dec, val} | log{val} | msg | http{id: webhook slot, val}. '
+      + 'Card format (keys are short): WHEN t=sens{src:thermo|hum|usens, ch|id, op:gt|lt, val x10, hyst x10} | scmp | out{id, dir 0 off/1 on/2 any} | time{min, days} | sun{ev:rise|set, off} | var{id, op, val} | boot | mbdev{p: panel, a: Modbus slave 0=any, ev:lost|back}; '
+      + 'AND t=sens | scmp | out{id, on 0|1} | twin{from, to, days} | var | psim{id, on 0|1} | mbdev{p, a, on 0|1}; THEN t=rel|grp{id, act 0 off/1 on/2 toggle} | pca|fet{id, val 0..255} | delay{s|m} | var{id, op:set|inc|dec, val} | log{val} | msg | http{id: webhook slot, val} | psim{id, act 0 stop/1 start/2 toggle}. '
       + 'days = bitmask bit0=Mon..bit6=Sun (127 = every day); minutes of day for time/twin; temperatures x10 (21.5 °C = 215). Full reference: myio_reference topic=flow. Editor/admin level.',
     inputSchema: {
       flow: z.record(z.string(), z.any()).optional().describe('{"id":1,"name":"...","en":1,"when":{...},"and":[...],"then":[...]}'),
@@ -231,7 +233,7 @@ export function registerAutomationTools(server: McpServer, ctx: ToolContext): vo
     const bmap = new Map(before.list.map(d => [d.id, d]));
     const changed = after.list.filter(x => { const b = bmap.get(x.id); return b && (b.on !== x.on || b.level !== x.level); });
     if (changed.length) L.push('outputs that changed: ' + changed.map(x => `${x.type} ${x.id}${x.name ? ` "${x.name}"` : ''} ${x.on ? 'ON' : 'OFF'}${x.type !== 'relay' && x.level !== undefined ? ` ${x.level}/255` : ''}`).join(', '));
-    if (t1.trace?.length) L.push('trace:\n' + t1.trace.slice(0, 20).map(r => '  ' + flowTraceText(r, num(t1.up), names)).join('\n'));
+    if (t1.trace?.length) L.push('trace:\n' + t1.trace.slice(0, 20).map(r => '  ' + flowTraceText(r, names)).join('\n'));
     if (action === 'fire' && !changed.length) L.push('(no output changed yet - a delay card may be running; see myio_flow_trace)');
     return text(L.join('\n'));
   });
@@ -247,9 +249,9 @@ export function registerAutomationTools(server: McpServer, ctx: ToolContext): vo
     const { file } = await readFlows(c);
     const tr = await flowTrace(c, since);
     const names = new Map((file.flows ?? []).map(f => [f.id, f.name ?? '']));
-    const rows = (tr.trace ?? []).slice(0, limit ?? 40);
+    const rows = traceNewest(tr.trace, limit ?? 40);
     return text([`${c.name}: tseq ${tr.tseq} (pass since=${tr.tseq} next time), ${rows.length} of ${tr.trace?.length ?? 0} entries; fired ${tr.fired ?? 0}, lost events ${tr.evdrop ?? 0}, `
-      + `max tick ${tr.tickmax ?? 0} µs, budget overruns ${tr.overrun ?? 0}`, ...rows.map(r => '  ' + flowTraceText(r, num(tr.up), names))].join('\n'));
+      + `max tick ${tr.tickmax ?? 0} µs, budget overruns ${tr.overrun ?? 0}`, ...rows.map(r => '  ' + flowTraceText(r, names))].join('\n'));
   });
 
   server.registerTool('myio_webhook_test', {
@@ -267,7 +269,7 @@ export function registerAutomationTools(server: McpServer, ctx: ToolContext): vo
       await sleep(800);
       const t = await flowTrace(c, t0.tseq);
       const hit = (t.trace ?? []).find(r => (Number(r[2]) === 10 || Number(r[2]) === 11) && Number(r[3]) === slot);
-      if (hit) return text(`${c.name}: ${flowTraceText(hit, num(t.up), new Map())}`);
+      if (hit) return text(`${c.name}: ${flowTraceText(hit, new Map())}`);
     }
     return text(`${c.name}: webhook ${slot} fired, no result in the trace within ~6 s (empty slot, or the outgoing HTTP slot is busy) - check myio_flow_trace later.`);
   });
@@ -290,7 +292,7 @@ export function registerAutomationTools(server: McpServer, ctx: ToolContext): vo
     if (gv.length && id === undefined) L.push('global variables (shared with Flow): ' + gv.map(x => `var${x.i}=${x.v}`).join(', '));
     if (trace && p.trace?.length) {
       const names = new Map((p.progs ?? []).map(x => [x.id, x.name ?? '']));
-      L.push(`trace (tseq ${p.tseq}):\n` + p.trace.slice(0, 30).map(r => '  ' + progTraceText(r, num(p.up), names)).join('\n'));
+      L.push(`trace (tseq ${p.tseq}, newest first):\n` + traceNewest(p.trace, 30).map(r => '  ' + progTraceText(r, names)).join('\n'));
     }
     return text(L.join('\n'));
   });
@@ -380,7 +382,7 @@ export function registerAutomationTools(server: McpServer, ctx: ToolContext): vo
     const names = new Map((p.progs ?? []).map(x => [x.id, x.name ?? '']));
     const L = [`${c.name}: sent ${cmd}`];
     for (const x of (p.progs ?? []).filter(x => (id === 0 ? x.st : x.id === id))) L.push(progText(x));
-    if (p.trace?.length) L.push('trace:\n' + p.trace.slice(0, 12).map(r => '  ' + progTraceText(r, num(p.up), names)).join('\n'));
+    if (p.trace?.length) L.push('trace:\n' + p.trace.slice(0, 12).map(r => '  ' + progTraceText(r, names)).join('\n'));
     if (action === 'enable' || action === 'disable') L.push('(RAM only - the file still says what it says; use persist=true to keep it after a reload/restart)');
     return text(L.join('\n'));
   });
@@ -391,10 +393,12 @@ export function registerAutomationTools(server: McpServer, ctx: ToolContext): vo
     description: 'The controller documentation bundled with this server (Hungarian, the canonical API_REFERENCE.md): topic=script = the complete myIO Script language '
       + '(directives, syntax, built-in functions, error codes, examples); topic=flow = the Flow engine and the flows.jsn card format; topic=api with query = the API sections whose '
       + 'heading contains the query (without query: the table of contents).',
-    inputSchema: { topic: z.enum(['script', 'flow', 'api']), query: z.string().optional() },
+    // topic=modbus csak bekapcsolt Modbus-felderitessel (ctx.modbusDisc): a sema egyebkent VALTOZATLAN (Directory-biralat)
+    inputSchema: { topic: z.enum(ctx.modbusDisc ? ['script', 'flow', 'api', 'modbus'] : ['script', 'flow', 'api']), query: z.string().optional() },
     annotations: RO,
   }, async ({ topic, query }) => {
     const md = apiReference();
+    if (topic === 'modbus') return text([MODBUS_GUIDE, searchHeadings('10/E.7', md), searchHeadings('10/E.6', md)].filter(Boolean).join('\n\n'));
     if (!md) return fail('API_REFERENCE.md is not bundled with this server installation');
     if (topic === 'script') return text(scriptReference(md) || 'section 10/G not found');
     if (topic === 'flow') return text(flowReference(md) || 'section 10/D not found');

@@ -10,7 +10,7 @@ import { FEAT, isV4 } from '../model.js';
 import {
   fmtSysdiag, FmList, fmtFmList, fmtSize, SAFE_PATH, normPath, isSystemPath, looksText, LOG_KINDS, logKindOfDir, yymmdd, filterLog, logLineLevel,
 } from '../model_diag.js';
-import { ToolContext, RO, WR_CFG_SET, WR_ADM, text, fail, serverArg, gate } from './common.js';
+import { ToolContext, RO, WR_CFG_SET, WR_ADM, text, fail, serverArg, gate, logUrl } from './common.js';
 
 const BIG_TIMEOUT = 90_000;   // napi naplok: a Due-n 200+ KB is lehet (W5500, ~20 KB/s)
 
@@ -140,10 +140,8 @@ export function registerDiagTools(server: McpServer, ctx: ToolContext): void {
       try { day = yymmdd(a.date, new Date()); } catch (e) { return fail((e as Error).message); }
       p = `/${lk.dir(a.channel)}/${lk.prefix}${day}.csv`;
     }
-    const v4 = isV4(await c.version());
-    const url = a.vol ? rawPath(v4 ? a.vol : 's', p) : p.slice(1);
     let body: string;
-    try { body = await c.getText(url, { timeoutMs: BIG_TIMEOUT }); }
+    try { body = await c.getText(await logUrl(c, p, a.vol), { timeoutMs: BIG_TIMEOUT }); }
     catch (e) { if (e instanceof MyIOError && e.status === 404) return fail(`${c.name}: ${p} does not exist (no entries that day, or another volume) - see myio_logs`); throw e; }
     const all = body.split(/\r?\n/).filter(l => l.trim());
     const hit = filterLog(all, { level: a.level, contains: a.contains, since: a.since, until: a.until });

@@ -135,7 +135,7 @@ test('myio_send_command: raw chain + diff of changed outputs', async () => {
   const none = await callText(client, 'myio_send_command', { commands: 'nonsense=1' });
   assert.match(none.text, /No output state changed/);
   const big = await callText(client, 'myio_send_command', { commands: 'x=' + 'y'.repeat(1100) });
-  assert.equal(big.isError, true); assert.match(big.text, /1024 B/);
+  assert.equal(big.isError, true); assert.match(big.text, /at most 1023 B per request/);
 });
 
 test('myio_get_status: raw endpoint, allow-list', async () => {

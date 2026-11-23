@@ -15,7 +15,7 @@ import { MyIOClient, MyIOError } from './api.js';
 import { FEAT, MinVersion, supports, decodeSensors, decodeInputs, levelToPercent } from './model.js';
 import { yymmdd } from './model_diag.js';
 import { apiReference, docChapters, scriptReference, flowReference, searchHeadings, headingList } from './docs.js';
-import { ToolContext, devices, usensOrEmpty } from './tools/common.js';
+import { ToolContext, devices, usensOrEmpty, logUrl } from './tools/common.js';
 import { readFlows } from './tools/auto.js';
 
 const LOG_MAX = 256 * 1024;   // a resource egy napi naplobol legfeljebb ennyit ad (a vege a fontos)
@@ -107,7 +107,7 @@ export function registerResources(server: McpServer, ctx: ToolContext): void {
     await c.require(FEAT.files, 'log files');
     let day: string; try { day = yymmdd(one(vars.date), new Date()); } catch (e) { throw new MyIOError((e as Error).message); }
     let body: string;
-    try { body = await c.getText(`ev_log/e_${day}.csv`, { timeoutMs: 90_000 }); }
+    try { body = await c.getText(await logUrl(c, `/ev_log/e_${day}.csv`), { timeoutMs: 90_000 }); }
     catch (e) { if (e instanceof MyIOError && e.status === 404) throw new MyIOError(`${c.name}: no event log for ${day} (ev_log/e_${day}.csv)`, 404); throw e; }
     if (Buffer.byteLength(body) > LOG_MAX) {
       const tail = Buffer.from(body).subarray(-LOG_MAX).toString('utf8');

@@ -3,12 +3,13 @@
  *
  * - A szallitas cserelheto (CLOUD_MCP_PLAN.md 11. fej., 2026-11-15): alapbol HttpTransport (a vezerlo HTTP-API-ja az otthoni
  *   halon, src/http_transport.ts); a felhos szerver ugyanezt az osztalyt a sajat transzportjaval hasznalja.
- * - Parancsok POST /info.json torzsben (a GET /command: ut NEM URL-dekodol, az ekezetes nev elromlana); torzs <= 1024 B.
+ * - Parancsok POST /info.json torzsben (a GET /command: ut NEM URL-dekodol, az ekezetes nev elromlana); torzs <= 1023 B (4.x)
+ *   / 255 B (Due 3.x), felette a command() a parancshatarokon darabol.
  * - A parancs valasza nem tartalmazza az uj allapotot: a visszaolvasas a hivo (tools/) dolga.
  *
  * Igazsagforras: SD_Files/js/lang/HU/API_REFERENCE.md (a csomagban: API_REFERENCE.md).
  */
-import { FEAT, InfoJson, MinVersion, Snapshot, UsensJson, VarBlock, minText, parseVarBlock, supports } from './model.js';
+import { FEAT, InevJson, InfoJson, MinVersion, RawInputEvent, Snapshot, UsensJson, VarBlock, isV4, minText, parseVarBlock, supports } from './model.js';
 import { MyIOError } from './transport.js';
 import type { HttpResult, RequestOpts, ServerConfig, Transport } from './transport.js';
 import { HttpTransport } from './http_transport.js';
@@ -16,7 +17,24 @@ import { HttpTransport } from './http_transport.js';
 export { MyIOError } from './transport.js';
 export type { HttpResult, RawResult, RequestOpts, ServerConfig, Transport } from './transport.js';
 
-export const POST_BODY_MAX = 1024;   // a fw POST-torzs plafonja (API-ref 13.)
+/** a fw POST-torzs plafonja (nyers, URL-kodolt bajtok). 4.x: RSL=1024, a >= RSL torzset a fw EGESZBEN eldobja -> 1023.
+ *  Due 3.x: RSL=256 -> 255; 3.12.45-ig a felette levo resz NEMAN levagodott es a csonka torzs (a felbevagott utolso parancs is)
+ *  lefutott, 3.12.46-tol 413 (ugyfel-jelzes 2026-11-23: 2 x ~700 B pWritePermission-lista, mindkettobol csak 255 B ervenyesult). */
+export const POST_BODY_MAX = 1023;
+export const POST_BODY_MAX_DUE = 255;
+/** `&`-fuzott parancs-torzs darabolasa a parancshatarokon, darabonkent <= max bajt. A fw a dekodolt torzset `&`-nel vagja, az ertekben
+ *  `&` nem lehet (kv()), ezert a nyers `&` mindig parancshatar; a fw-globalis kivalasztasok (permissionsUser, knx_sel...) a POST-ok kozt megmaradnak. */
+export function splitBody(body: string, max: number): string[] {
+  const out: string[] = [];
+  let cur = '';
+  for (const c of body.split('&').filter(Boolean)) {
+    if (Buffer.byteLength(c) > max) throw new MyIOError(`command ${c.slice(0, 40)}... is ${Buffer.byteLength(c)} B, the controller accepts at most ${max} B per request`);
+    const next = cur ? `${cur}&${c}` : c;
+    if (Buffer.byteLength(next) > max) { out.push(cur); cur = c; } else cur = next;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
 const INFO_TTL_MS = 60_000;          // info.json gyorsitotar
 const NAMES_TTL_MS = 10 * 60_000;    // d_sens_out.json (nevek) gyorsitotar - a doksi: "neveket egyszer, utana sens_out"
 
@@ -46,6 +64,7 @@ export class MyIOClient {
     if (r.status === 429) throw new MyIOError(`${this.name}: login brake (429) - too many wrong passwords from this IP; wait ${h['retry-after'] ?? '?'} s`, 429);
     if (r.status === 403) throw new MyIOError(`${this.name}: forbidden (403) - this user level cannot access ${what}`, 403);
     if (r.status === 404) throw new MyIOError(`${this.name}: ${what} not found (404) - not supported by this firmware or user level`, 404);
+    if (r.status === 413) throw new MyIOError(`${this.name}: ${what} too long (413) - the controller executed none of it`, 413);
     if (r.status === 503) throw new MyIOError(`${this.name}: controller busy (503) for ${what} - from outside the home network it serves heavy requests at most every few seconds; try again later${h['retry-after'] ? ` (Retry-After ${h['retry-after']} s)` : ''}`, 503);
     if (r.status !== 200) throw new MyIOError(`${this.name}: HTTP ${r.status} for ${what}`, r.status);
   }
@@ -91,6 +110,12 @@ export class MyIOClient {
   }
 
   async version(): Promise<string> { return String((await this.info()).info.version ?? ''); }
+  /** a POST-torzs plafonja ezen a vezerlon (POST_BODY_MAX / POST_BODY_MAX_DUE); ismeretlen verzional a szigorubb */
+  async bodyMax(): Promise<number> {
+    let v = '';
+    try { v = await this.version(); } catch { /* info nelkul a szigorubb; a hibat a parancs maga hozza */ }
+    return isV4(v) ? POST_BODY_MAX : POST_BODY_MAX_DUE;
+  }
   async supports(min: MinVersion): Promise<boolean> { return supports(await this.version(), min); }
   /** verzio-kapu: ertheto hiba, ha a funkcio ezen a fw-n nincs */
   async require(min: MinVersion, feature: string): Promise<void> {
@@ -121,17 +146,34 @@ export class MyIOClient {
     return this.getJson<UsensJson>('usensor.json');
   }
 
+  /** bemenet-esemenyek [4.27]: a `since` sorszam UTANI gesztusok (since nagy szam = csak a mostani sorszam kell) */
+  async inputEvents(since: number): Promise<{ seq: number; events: RawInputEvent[] }> {
+    const j = await this.getJson<InevJson>(`inev.json?since=${Math.max(0, Math.floor(since))}`);
+    if (!j?.inev || typeof j.inev.seq !== 'number') throw new MyIOError(`${this.name}: inev.json has no "inev" object`);
+    return { seq: j.inev.seq, events: Array.isArray(j.inev.ev) ? j.inev.ev : [] };
+  }
+
   /**
    * Parancs(ok) kuldese: string ("r_ON=16&PCA*2001=128") vagy {k: v} terkep -> POST /info.json.
    * A valasz az info.json (4.x es 3.12 is ezt adja a POST-ra); az allapotot a hivo olvassa vissza.
+   * A vezerlo plafonja (bodyMax) feletti torzs a parancshatarokon tobb POST-ra bomlik, sorrendben; `parts` = a POST-ok szama.
    */
-  async command(cmd: string | Record<string, string | number>, opts: RequestOpts = {}): Promise<HttpResult> {
+  async command(cmd: string | Record<string, string | number>, opts: RequestOpts = {}): Promise<HttpResult & { parts: number }> {
     const body = typeof cmd === 'string' ? cmd : Object.entries(cmd).map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join('&');
     if (!body) throw new MyIOError('empty command');
-    if (Buffer.byteLength(body) > POST_BODY_MAX) throw new MyIOError(`command body is ${Buffer.byteLength(body)} B, the controller accepts at most ${POST_BODY_MAX} B per request - split it`);
-    const r = await this.request('POST', 'info.json', body, undefined, opts);
-    this.check(r, 'command');
-    return r;
+    const max = await this.bodyMax();
+    const parts = Buffer.byteLength(body) > max ? splitBody(body, max) : [body];
+    let r: HttpResult | undefined;
+    for (let i = 0; i < parts.length; i++) {
+      try {
+        r = await this.request('POST', 'info.json', parts[i], undefined, opts);
+        this.check(r, parts.length > 1 ? `command (part ${i + 1}/${parts.length})` : 'command');
+      } catch (e) {
+        if (i === 0 || !(e instanceof Error)) throw e;   // a POST-ot sosem ismeteljuk: a hivo tudja meg, mennyi ment at
+        throw new MyIOError(`${e.message} - the first ${i} of ${parts.length} parts were already executed`, e instanceof MyIOError ? e.status : undefined);
+      }
+    }
+    return Object.assign(r!, { parts: parts.length });
   }
 
   /** nyers GET: a fw egyes vegpontjai (req*.js var-blokkok) HTTP-fejlec NELKUL valaszolnak; ha van fejlec, 401/403/404 -> hiba */
@@ -172,11 +214,14 @@ export class MyIOClient {
     catch (e) { if (e instanceof MyIOError && e.status === 404) return ''; throw e; }
   }
 
-  /** a kivalasztott user jog-terkepe (4.x: reqUserpermissions.js fejlec nelkul) */
+  /** a kivalasztott user jog-terkepe. 4.x: reqUserpermissions.js (fejlec nelkul); Due 3.x: a /userpermissions oldal var-blokkja
+   *  (a Due reqUserpermissions.js-e 3.12.29 ota ures, az oldal viszont ugyanezeket a tomboket adja). A fw a GLOBALISAN kivalasztott
+   *  user terkepet kuldi -> elotte permissionsUser=<slot>; ha kozben mas kliens mast valasztott, hiba (nem a rossz user terkepe). */
   async permissionVars(slot: number): Promise<VarBlock> {
     await this.command(`permissionsUser=${slot}`);
-    const vb = parseVarBlock(await this.rawGet('reqUserpermissions.js'));
-    if (!vb.has('permissionsUser')) throw new MyIOError(`${this.name}: permission map not available on this firmware (reqUserpermissions.js is empty on Due 3.x)`);
+    const vb = isV4(await this.version()) ? parseVarBlock(await this.rawGet('reqUserpermissions.js')) : await this.pageVars('userpermissions');
+    if (!vb.has('permissionsUser')) throw new MyIOError(`${this.name}: permission map not available on this firmware`);
+    if (vb.get('permissionsUser') !== slot) throw new MyIOError(`${this.name}: the controller returned the map of user slot ${String(vb.get('permissionsUser'))} instead of ${slot} (another client selected a user meanwhile) - try again`);
     return vb;
   }
 
