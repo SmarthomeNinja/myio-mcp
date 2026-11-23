@@ -5,7 +5,7 @@
     },
     "myio": {
       "command": "npx",
-      "args": ["-y", "myio-mcp@1.6.2"],
+      "args": ["-y", "myio-mcp@1.7.0"],
       "env": {
         "MYIO_BASE_URL": "${MYIO_BASE_URL}",
         "MYIO_USERNAME": "${MYIO_USERNAME}",
